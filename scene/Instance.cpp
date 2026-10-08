@@ -16,28 +16,75 @@ limitations under the License.
 namespace anari {
 namespace rpr {
 
-Instance::Instance()
-{
-  setCommitPriority(COMMIT_PRIORITY_INSTANCE);
-}
+Instance::Instance(RPRGlobalState *s) : SceneObject(ANARI_INSTANCE, s), m_transform_array(this) {}
 
-void Instance::commit()
+void Instance::commitParameters()
 {
-  m_group     = getParamObject<Group>("group");
-  m_transform = getParam<mat4x3>("transform", mat4x3(1));
+  m_group           = getObjectParam<Group>(this, "group", ANARI_GROUP);
+  m_transform       = getParam<mat4>("transform", mat4(linalg::identity));
+  m_transform_array = getArray1D(this, "transform");
 
-  if (!m_group)
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
   {
-    throw std::runtime_error("'group' is a required parameter!");
+    m_uniform_attributes[slot].reset();
+    float4 value = DEFAULT_ATTRIBUTE_VALUE;
+    if (getParam(attributeName(slot), ANARI_FLOAT32_VEC4, &value))
+      m_uniform_attributes[slot] = value;
   }
-
-  resetBounds();
-  extendBounds(xfmBox(m_transform, m_group->bounds()));
 }
 
-void Instance::attachToScene(rpr_scene scene)
+void Instance::finalize()
 {
-  m_group->attachToScene(scene, m_transform);
+  if (!m_group)
+    reportMessage(ANARI_SEVERITY_WARNING, "'group' is a required parameter!");
+
+  if (m_transform_array && m_transform_array->elementType() != ANARI_FLOAT32_MAT4)
+  {
+    reportMessage(ANARI_SEVERITY_WARNING, "'transform' array elements are %s, but need to be %s",
+        anari::toString(m_transform_array->elementType()), anari::toString(ANARI_FLOAT32_MAT4));
+    m_transform_array = nullptr;
+  }
+}
+
+bool Instance::isValid() const
+{
+  return m_group && m_group->isValid();
+}
+
+template <typename FCN_T>
+void Instance::forEachTransform(FCN_T &&fcn) const
+{
+  if (m_transform_array)
+  {
+    for (auto *transform = m_transform_array->beginAs<mat4>(); transform != m_transform_array->endAs<mat4>();
+         ++transform)
+      fcn(*transform);
+  } else
+  {
+    fcn(m_transform);
+  }
+}
+
+box3 Instance::bounds() const
+{
+  box3 result = emptyBox();
+  if (!isValid())
+    return result;
+  const box3 groupBounds = m_group->bounds();
+  if (isEmpty(groupBounds))
+    return result;
+  forEachTransform([&](const mat4 &transform) { result.extend(xfmBox(transform, groupBounds)); });
+  return result;
+}
+
+void Instance::attachToScene(
+    rpr_scene scene, SceneItems &items, std::vector<EnvironmentLightInstance> &environmentLights) const
+{
+  if (!isValid())
+    return;
+  forEachTransform([&](const mat4 &transform) {
+    m_group->content().attachToScene(scene, transform, m_uniform_attributes, items, environmentLights);
+  });
 }
 
 } // namespace rpr

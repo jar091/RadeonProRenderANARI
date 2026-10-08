@@ -19,8 +19,7 @@ namespace anari::rpr {
 
 struct Triangles : public Mesh
 {
-  inline Triangles(rpr_context context, rpr_material_system materialSystem) : Mesh(context, materialSystem){};
-  void commit() override;
+  inline explicit Triangles(RPRGlobalState *s) : Mesh(s, 3){};
 };
 
 } // namespace anari::rpr

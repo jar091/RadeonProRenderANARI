@@ -15,33 +15,54 @@ limitations under the License.
 
 namespace anari::rpr {
 
-Perspective::Perspective(rpr_camera &camera) : Camera(camera)
+Perspective::Perspective(RPRGlobalState *s) : Camera(s) {}
+
+void Perspective::commitParameters()
 {
-  CHECK(rprCameraSetMode(m_camera, RPR_CAMERA_MODE_PERSPECTIVE))
+  Camera::commitParameters();
+
+  m_sensor_height   = getParam<float>("sensorHeight", 24.f); // additional parameter
+  m_fovy            = getParam<float>("fovy", pi / 3.f);
+  m_focus_distance  = getParam<float>("focusDistance", 1.f);
+  m_aperture_radius = getParam<float>("apertureRadius", 0.f);
+
+  if (!(m_sensor_height > 0.f))
+    m_sensor_height = 24.f;
+  m_fovy = std::clamp(m_fovy, 1e-3f, pi - 1e-3f);
 }
 
-void Perspective::commit()
+void Perspective::finalize()
 {
-  Camera::commit();
+  Camera::finalize();
+  if (!m_camera)
+    return;
 
-  auto sensorHeight   = getParam<float>("sensorHeight", 24.f); // additional parameter
-  auto fovy           = getParam<float>("fovy", radians(60.f));
-  auto focusDistance  = getParam<float>("focusDistance", 1.f);
-  auto apertureRadius = getParam<float>("apertureRadius", 0.f);
-  auto aspect         = getParam<float>("aspect", 1.f);
+  CHECK(rprCameraSetMode(m_camera, RPR_CAMERA_MODE_PERSPECTIVE))
 
-  if (apertureRadius > 0)
+  // sensor size and focal length are in millimeters
+  const float sensorWidth = m_sensor_height * m_aspect;
+  CHECK(rprCameraSetSensorSize(m_camera, sensorWidth, m_sensor_height))
+
+  const float focalLength = m_sensor_height / (2.f * std::tan(m_fovy * 0.5f));
+  CHECK(rprCameraSetFocalLength(m_camera, focalLength))
+
+  if (m_aperture_radius > 0.f && m_focus_distance > 0.f)
   {
-    float fstop = focusDistance / (apertureRadius * 2);
+    // The diameter of the aperture is the focal length divided by the f-number. The focal length is
+    // given in millimeters, the aperture radius in scene units (meters).
+    const float fstop = focalLength / (2000.f * m_aperture_radius);
     CHECK(rprCameraSetFStop(m_camera, fstop))
-    CHECK(rprCameraSetFocusDistance(m_camera, focusDistance))
+    CHECK(rprCameraSetFocusDistance(m_camera, m_focus_distance))
+  } else
+  {
+    // no depth of field
+    CHECK(rprCameraSetFStop(m_camera, std::numeric_limits<float>::max()))
   }
+}
 
-  float sensorWidth = sensorHeight * aspect;
-  CHECK(rprCameraSetSensorSize(m_camera, sensorWidth, sensorHeight))
-
-  float focal_length = sensorHeight / (2 * tan(fovy * 0.5f));
-  CHECK(rprCameraSetFocalLength(m_camera, focal_length))
+float Perspective::depth(const float3 &point) const
+{
+  return linalg::length(point - m_position);
 }
 
 } // namespace anari::rpr

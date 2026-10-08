@@ -13,55 +13,70 @@ limitations under the License.
 ********************************************************************/
 
 #include "Object.h"
+// std
+#include <string>
 
 namespace anari {
 namespace rpr {
 
-std::atomic<TimeStamp> g_timeStamp = []() { return 0; }();
+// Object definitions /////////////////////////////////////////////////////////
 
-TimeStamp newTimeStamp()
+Object::Object(ANARIDataType type, RPRGlobalState *s) : helium::BaseObject(type, s)
 {
-  return g_timeStamp++;
+  // helium only commits objects with changed parameters, but an object without any parameter (for
+  // example a material with default values) still has to be finalized once
+  markParameterChanged();
 }
 
-void Object::commit()
+void Object::commitParameters()
 {
   // no-op
 }
 
-bool Object::getProperty(const std::string &, ANARIDataType, void *, ANARIWaitMask)
+void Object::finalize()
 {
+  // no-op
+}
+
+bool Object::getProperty(
+    const std::string_view &name, ANARIDataType type, void *ptr, uint64_t size, uint32_t flags)
+{
+  if (name == "valid" && type == ANARI_BOOL)
+  {
+    helium::writeToVoidP(ptr, isValid());
+    return true;
+  }
+
   return false;
 }
 
-void Object::setObjectType(ANARIDataType type)
+bool Object::isValid() const
 {
-  m_type = type;
+  return true;
 }
 
-ANARIDataType Object::type() const
+RPRGlobalState *Object::deviceState() const
 {
-  return m_type;
+  return (RPRGlobalState *)helium::BaseObject::m_state;
 }
 
-TimeStamp Object::lastUpdated() const
+void Object::markSceneChanged() const
 {
-  return m_lastUpdated;
+  deviceState()->objectUpdates.lastSceneChange = helium::newTimeStamp();
 }
 
-void Object::markUpdated()
+// UnknownObject definitions //////////////////////////////////////////////////
+
+UnknownObject::UnknownObject(ANARIDataType type, std::string_view subtype, RPRGlobalState *s)
+    : Object(type, s)
 {
-  m_lastUpdated = newTimeStamp();
+  reportMessage(ANARI_SEVERITY_WARNING, "unsupported %s subtype '%s', the object is ignored",
+      anari::toString(type), std::string(subtype).c_str());
 }
 
-int Object::commitPriority() const
+bool UnknownObject::isValid() const
 {
-  return m_commitPriority;
-}
-
-void Object::setCommitPriority(int p)
-{
-  m_commitPriority = p;
+  return false;
 }
 
 } // namespace rpr

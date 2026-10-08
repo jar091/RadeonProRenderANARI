@@ -23,63 +23,51 @@ limitations under the License.
 namespace anari {
 namespace rpr {
 
-Light::Light(rpr_context &context) : m_context(context) {}
+Light::Light(RPRGlobalState *s) : SceneObject(ANARI_LIGHT, s) {}
 
-Light *Light::createInstance(rpr_context &context, rpr_material_system matsys, const char *type)
+Light *Light::createInstance(std::string_view type, RPRGlobalState *s)
 {
-  if (std::strcmp(type, "quad") == 0)
+  if (type == "quad")
   {
-    return new QuadLight(context, matsys);
+    return new QuadLight(s);
   }
-  if (std::strcmp(type, "directional") == 0)
+  if (type == "directional")
   {
-    return new DirectionalLight(context);
+    return new DirectionalLight(s);
   }
-  if (std::strcmp(type, "point") == 0)
+  if (type == "point")
   {
-    return new PointLight(context);
+    return new PointLight(s);
   }
-  if (std::strcmp(type, "spot") == 0)
+  if (type == "spot")
   {
-    return new SpotLight(context);
+    return new SpotLight(s);
   }
-  if (std::strcmp(type, "hdri") == 0)
+  if (type == "hdri")
   {
-    return new HdriLight(context);
+    return new HdriLight(s);
   }
-  if (std::strcmp(type, "ring") == 0)
+  if (type == "ring")
   {
-    return new RingLight(context);
-  } else
-  {
-    throw std::runtime_error("could not create light");
+    return new RingLight(s);
   }
+  return (Light *)new UnknownObject(ANARI_LIGHT, type, s);
 }
 
-void Light::attachToScene(rpr_scene scene)
+void Light::commitParameters()
 {
-  attachToScene(scene, mat4(1));
-}
-
-void Light::commit()
-{
-  clear();
   m_visible = getParam<bool>("visible", true);
-  m_color   = getParam<vec3>("color", vec3(1.f));
+  m_color   = getParam<float3>("color", float3(1.f));
 }
 
-void Light::clear()
+bool Light::isEnvironmentLight() const
 {
-  for (void *light : m_instances)
-  {
-    CHECK(rprObjectDelete(light))
-  }
-  m_instances.clear();
+  return false;
 }
 
-Light::~Light()
+bool Light::visible() const
 {
-  clear();
+  return m_visible;
 }
 
 } // namespace rpr

@@ -17,10 +17,16 @@ limitations under the License.
 
 namespace anari::rpr {
 
+// The default renderer: the path tracer of the Northstar plugin
 struct PathTracerRenderer : public Renderer
 {
-  explicit PathTracerRenderer(rpr_context context);
-  void commit() override;
+  explicit PathTracerRenderer(RPRGlobalState *s);
+  void commitParameters() override;
+  void attachToContext() const override;
+
+ private:
+  int   m_max_ray_depth{8};
+  float m_radiance_clamp{0.f};
 };
 
 } // namespace anari::rpr

@@ -17,28 +17,37 @@ limitations under the License.
 
 namespace anari::rpr {
 
-// sphere, cone, cylinder geometries
+// Base of the geometries which RPR does not have as primitives: spheres, cylinders, cones and curves.
+// They are tessellated to one polygon mesh per geometry, attributes become vertex attributes of the mesh.
 struct Primitives : public Geometry
 {
  public:
-  Primitives(rpr_context context, rpr_material_system materialSystem);
-  void getInstances(std::vector<rpr_shape> &out_shapes, mat4 transform) override;
-  bool hasAttribute(const char *name) override;
+  explicit Primitives(RPRGlobalState *s);
+  void commitParameters() override;
 
  protected:
-  virtual rpr_shape getPrimitive(int primitive_number, mat4 externalTransform)
-  {
-    return nullptr;
-  };
-  static void processAttributeArray(Array1D *data, Array1D *index, std::vector<vec4> &outVector);
-  void        processAttributeParameters(Array1D *index);
+  // checks 'vertex.position', returns the number of vertices or 0 if the geometry has no valid vertices
+  size_t checkVertices(const char *subtype);
+  // checks an optional array of the geometry, returns nullptr if it can not be used
+  const Array1D *checkArray(
+      const Array1D *array, ANARIDataType elementType, size_t minSize, const char *name) const;
 
-  size_t            m_num_primitives{};
-  std::vector<vec4> m_colors;
-  std::vector<vec4> m_attribute0;
-  std::vector<vec4> m_attribute1;
-  std::vector<vec4> m_attribute2;
-  std::vector<vec4> m_attribute3;
+  // selects the attribute arrays which are used for 'numVertices' vertices and 'numPrimitives' primitives
+  // and enables their slots in the mesh
+  void prepareAttributes(MeshData &mesh, size_t numVertices, size_t numPrimitives);
+  // values of all attributes for a vertex of a primitive
+  AttributeValues attributeValues(size_t vertex, size_t primitive) const;
+
+  // The tessellation of a geometry gets coarser if it has more triangles than this limit: RPR needs
+  // several seconds per million triangles to build its acceleration structure.
+  static constexpr size_t MAX_TRIANGLES = 2000000;
+
+  helium::ChangeObserverPtr<Array1D> m_vertices;
+  helium::ChangeObserverPtr<Array1D> m_indices;
+
+ private:
+  std::array<const Array1D *, NUM_ATTRIBUTES> m_used_vertex_attributes{};
+  std::array<const Array1D *, NUM_ATTRIBUTES> m_used_primitive_attributes{};
 };
 
 } // namespace anari::rpr

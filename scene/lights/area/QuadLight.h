@@ -17,24 +17,26 @@ limitations under the License.
 
 namespace anari::rpr {
 
+// Rectangular area light: a mesh with an emissive material
 struct QuadLight : public Light
 {
-  QuadLight(rpr_context &context, rpr_material_system &matsys);
+  explicit QuadLight(RPRGlobalState *s);
   ~QuadLight() override;
 
-  void commit() override;
-  void attachToScene(rpr_scene scene, mat4 transform) override;
+  void commitParameters() override;
+  void finalize() override;
+  void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) override;
 
  private:
-  rpr_material_node   m_material{};
-  rpr_material_system m_matsys;
-
-  std::vector<vec3> m_vertex;
-  std::vector<vec3> m_normal;
-  rpr_int           m_faces[1] = {4};
-  rpr_int           m_index[4] = {0, 1, 3, 2};
-
   void clear();
+
+  rpr_material_node m_material{};
+
+  float3      m_position{0.f};
+  float3      m_edge1{1.f, 0.f, 0.f};
+  float3      m_edge2{0.f, 1.f, 0.f};
+  float       m_radiance{1.f}; // W/sr/m^2
+  std::string m_side;
 };
 
 } // namespace anari::rpr

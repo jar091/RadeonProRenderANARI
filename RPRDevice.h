@@ -1,5 +1,4 @@
 /**********************************************************************
-Copyright 2021 The Khronos Group
 Copyright 2022 Advanced Micro Devices, Inc
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,50 +15,31 @@ limitations under the License.
 
 // rpr
 #include "RadeonProRender.h"
-// anari
-#include "anari/detail/Device.h"
-#include "anari/detail/IntrusivePtr.h"
-#include "anari/detail/ParameterizedObject.h"
+// helium
+#include "helium/BaseDevice.h"
+
 #include "interface.h"
+#include "Object.h"
+#include "RPRGlobalState.h"
 
 namespace anari::rpr {
 
-struct Object;
-
-struct RPR_DEVICE_INTERFACE RPRDevice : public Device, public ParameterizedObject, public RefCounted
+struct RPRDevice : public helium::BaseDevice
 {
   /////////////////////////////////////////////////////////////////////////////
   // Main interface to accepting API calls
   /////////////////////////////////////////////////////////////////////////////
 
-  // Device API ///////////////////////////////////////////////////////////////
-
-  int deviceImplements(const char *extension) override;
-
-  void deviceSetParameter(const char *id, ANARIDataType type, const void *mem) override;
-
-  void deviceUnsetParameter(const char *id) override;
-
-  void deviceCommit() override;
-
-  void deviceRetain() override;
-
-  void deviceRelease() override;
-
   // Data Arrays //////////////////////////////////////////////////////////////
 
-  ANARIArray1D newArray1D(void *appMemory, ANARIMemoryDeleter deleter, void *userdata, ANARIDataType,
-      uint64_t numItems1, uint64_t byteStride1) override;
+  ANARIArray1D newArray1D(const void *appMemory, ANARIMemoryDeleter deleter, const void *userdata,
+      ANARIDataType, uint64_t numItems1) override;
 
-  ANARIArray2D newArray2D(void *appMemory, ANARIMemoryDeleter deleter, void *userdata, ANARIDataType,
-      uint64_t numItems1, uint64_t numItems2, uint64_t byteStride1, uint64_t byteStride2) override;
+  ANARIArray2D newArray2D(const void *appMemory, ANARIMemoryDeleter deleter, const void *userdata,
+      ANARIDataType, uint64_t numItems1, uint64_t numItems2) override;
 
-  ANARIArray3D newArray3D(void *appMemory, ANARIMemoryDeleter deleter, void *userdata, ANARIDataType,
-      uint64_t numItems1, uint64_t numItems2, uint64_t numItems3, uint64_t byteStride1, uint64_t byteStride2,
-      uint64_t byteStride3) override;
-
-  void *mapArray(ANARIArray) override;
-  void  unmapArray(ANARIArray) override;
+  ANARIArray3D newArray3D(const void *appMemory, ANARIMemoryDeleter deleter, const void *userdata,
+      ANARIDataType, uint64_t numItems1, uint64_t numItems2, uint64_t numItems3) override;
 
   // Renderable Objects ///////////////////////////////////////////////////////
 
@@ -73,7 +53,7 @@ struct RPR_DEVICE_INTERFACE RPRDevice : public Device, public ParameterizedObjec
   ANARISurface newSurface() override;
   ANARIVolume  newVolume(const char *type) override;
 
-  // Surface Meta-Data ////////////////////////////////////////////////////////
+  // Model Meta-Data //////////////////////////////////////////////////////////
 
   ANARIMaterial newMaterial(const char *material_type) override;
 
@@ -83,61 +63,57 @@ struct RPR_DEVICE_INTERFACE RPRDevice : public Device, public ParameterizedObjec
 
   ANARIGroup newGroup() override;
 
-  ANARIInstance newInstance() override;
+  ANARIInstance newInstance(const char *type) override;
 
   // Top-level Worlds /////////////////////////////////////////////////////////
 
   ANARIWorld newWorld() override;
+
+  // Query functions //////////////////////////////////////////////////////////
+
+  const char **getObjectSubtypes(ANARIDataType objectType) override;
+  const void  *getObjectInfo(ANARIDataType objectType, const char *objectSubtype, const char *infoName,
+       ANARIDataType infoType) override;
+  const void  *getParameterInfo(ANARIDataType objectType, const char *objectSubtype, const char *parameterName,
+       ANARIDataType parameterType, const char *infoName, ANARIDataType infoType) override;
 
   // Object + Parameter Lifetime Management ///////////////////////////////////
 
   int getProperty(ANARIObject object, const char *name, ANARIDataType type, void *mem, uint64_t size,
       uint32_t mask) override;
 
-  void setParameter(ANARIObject object, const char *name, ANARIDataType type, const void *mem) override;
-
-  void unsetParameter(ANARIObject object, const char *name) override;
-
-  void commit(ANARIObject object) override;
-
-  void release(ANARIObject _obj) override;
-
-  void retain(ANARIObject _obj) override;
-
-  // FrameBuffer Manipulation /////////////////////////////////////////////////
+  // Frame Manipulation ///////////////////////////////////////////////////////
 
   ANARIFrame newFrame() override;
-
-  const void *frameBufferMap(ANARIFrame fb, const char *channel) override;
-
-  void frameBufferUnmap(ANARIFrame fb, const char *channel) override;
 
   // Frame Rendering //////////////////////////////////////////////////////////
 
   ANARIRenderer newRenderer(const char *type) override;
 
-  void renderFrame(ANARIFrame) override;
-  int  frameReady(ANARIFrame, ANARIWaitMask) override;
-  void discardFrame(ANARIFrame) override;
-
   /////////////////////////////////////////////////////////////////////////////
   // Helper/other functions and data members
   /////////////////////////////////////////////////////////////////////////////
 
-  RPRDevice();
-
+  RPRDevice(ANARIStatusCallback defaultCallback, const void *userPtr);
+  explicit RPRDevice(ANARILibrary library);
   ~RPRDevice() override;
 
-  void flushCommitBuffer();
-
  private:
-  rpr_context         m_context{};
-  rpr_material_system m_matsys{};
-  std::string         m_plugin_name   = "Northstar";
-  unsigned int        m_render_device = 1; // render with GPU0 by default
+  // creates the RPR context when the first object is created
+  void initDevice();
+  bool createContext(rpr_creation_flags flags, const std::string &kernelsPath, const std::string &cachePath);
 
-  std::vector<Object *> m_objectsToCommit;
-  bool                  m_needToSortCommits{false};
+  void deviceCommitParameters() override;
+  int  deviceGetProperty(
+       const char *name, ANARIDataType type, void *mem, uint64_t size, uint32_t mask) override;
+
+  RPRGlobalState *deviceState() const;
+
+  bool        m_initialized{false};
+  std::string m_compute_device{"gpu"};
+  int         m_gpu_index{0};
+  std::string m_kernels_path;
+  std::string m_cache_path;
 };
 
 } // namespace anari::rpr

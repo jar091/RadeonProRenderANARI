@@ -1,0 +1,108 @@
+{
+  "info": {
+    "name": "RPR_DEVICE",
+    "type": "device",
+    "dependencies": [
+      "anari_core_1_0",
+      "anari_core_objects_base_1_0",
+      "khr_camera_depth_of_field",
+      "khr_camera_orthographic",
+      "khr_camera_perspective",
+      "khr_frame_accumulation",
+      "khr_frame_completion_callback",
+      "khr_geometry_cone",
+      "khr_geometry_curve",
+      "khr_geometry_cylinder",
+      "khr_geometry_isosurface",
+      "khr_geometry_quad",
+      "khr_geometry_sphere",
+      "khr_geometry_triangle",
+      "khr_instance_transform",
+      "khr_instance_transform_array",
+      "khr_light_directional",
+      "khr_light_hdri",
+      "khr_light_point",
+      "khr_light_quad",
+      "khr_light_ring",
+      "khr_light_spot",
+      "khr_material_matte",
+      "khr_material_physically_based",
+      "khr_renderer_ambient_light",
+      "khr_renderer_background_color",
+      "khr_renderer_background_image",
+      "khr_sampler_image1d",
+      "khr_sampler_image2d",
+      "khr_sampler_image3d",
+      "khr_sampler_transform",
+      "khr_spatial_field_structured_regular",
+      "khr_volume_transfer_function1d"
+    ]
+  },
+  "objects": [
+    {
+      "type": "ANARI_DEVICE",
+      "parameters": [
+        {
+          "name": "computeDevice",
+          "types": ["ANARI_STRING"],
+          "tags": [],
+          "default": "gpu",
+          "values": ["gpu", "cpu", "gpu+cpu", "opencl"],
+          "description": "devices used by RadeonProRender for rendering (can also be set with the environment variable ANARI_RPR_COMPUTE_DEVICE)"
+        },
+        {
+          "name": "gpuIndex",
+          "types": ["ANARI_INT32"],
+          "tags": [],
+          "default": 0,
+          "minimum": 0,
+          "maximum": 15,
+          "description": "index of the GPU used for rendering"
+        },
+        {
+          "name": "kernelsPath",
+          "types": ["ANARI_STRING"],
+          "tags": [],
+          "description": "directory with the precompiled Northstar kernels (default: 'hipbin' next to the device library, can also be set with the environment variable ANARI_RPR_KERNELS_PATH)"
+        },
+        {
+          "name": "cachePath",
+          "types": ["ANARI_STRING"],
+          "tags": [],
+          "description": "directory for the cache files of RadeonProRender (default: 'cache' next to the device library, can also be set with the environment variable ANARI_RPR_CACHE_PATH)"
+        }
+      ]
+    },
+    {
+      "type": "ANARI_RENDERER",
+      "name": "default",
+      "parameters": [
+        {
+          "name": "pixelSamples",
+          "types": ["ANARI_INT32"],
+          "tags": [],
+          "default": 1,
+          "minimum": 1,
+          "description": "samples per pixel rendered by every frame"
+        },
+        {
+          "name": "maxRayDepth",
+          "types": ["ANARI_INT32"],
+          "tags": [],
+          "default": 8,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "maximum number of bounces of a path"
+        },
+        {
+          "name": "radianceClamp",
+          "types": ["ANARI_FLOAT32"],
+          "tags": [],
+          "default": 0.0,
+          "minimum": 0.0,
+          "description": "clamp the radiance of indirect samples to reduce fireflies (0 disables clamping)"
+        }
+      ]
+    }
+  ]
+}

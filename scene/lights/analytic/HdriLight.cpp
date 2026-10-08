@@ -15,62 +15,74 @@ limitations under the License.
 
 namespace anari::rpr {
 
-HdriLight::HdriLight(rpr_context context) : AnalyticLight(context) {}
+HdriLight::HdriLight(RPRGlobalState *s) : AnalyticLight(s), m_radiance(this) {}
 
-void HdriLight::commit()
+void HdriLight::commitParameters()
 {
-  Light::commit();
-  clear();
+  Light::commitParameters();
+  m_direction = getParam<float3>("direction", float3(1.f, 0.f, 0.f));
+  m_up        = getParam<float3>("up", float3(0.f, 0.f, 1.f));
+  m_scale     = getParam<float>("scale", 1.f);
+  m_radiance  = getArray2D(this, "radiance");
+}
 
-  m_direction    = getParam<vec3>("direction", vec3(1, 0, 0));
-  m_up           = getParam<vec3>("up", vec3(1, 0, 0));
-  m_scale        = getParam<float32>("scale", 1.f);
-  auto imageData = getParamObject<Array2D>("radiance");
-
-  if (!imageData) // image array has not been provided, use color parameter
+void HdriLight::finalize()
+{
+  if (!m_radiance)
   {
-    rpr_image_desc desc        = {1, 1, 0, 3 * sizeof(rpr_float), 0};
-    float          bg_color[3] = {m_color.r, m_color.g, m_color.b};
-    CHECK(rprContextCreateImage(m_context, {3, RPR_COMPONENT_TYPE_FLOAT32}, &desc, bg_color, &m_image))
-  } else
+    reportMessage(ANARI_SEVERITY_WARNING, "missing required parameter 'radiance' on hdri light");
+  } else if (m_radiance->elementType() != ANARI_FLOAT32_VEC3 && m_radiance->elementType() != ANARI_FLOAT32_VEC4)
   {
-    rpr_image_desc desc;
-    desc.image_width       = imageData->size(0);
-    desc.image_height      = imageData->size(1);
-    desc.image_depth       = 0;
-    desc.image_row_pitch   = imageData->size(0) * 3 * sizeof(rpr_float);
-    desc.image_slice_pitch = 0;
-    CHECK(rprContextCreateImage(
-        m_context, {3, RPR_COMPONENT_TYPE_FLOAT32}, &desc, imageData->dataAs<vec3>(), &m_image))
+    reportMessage(ANARI_SEVERITY_WARNING, "'radiance' of hdri light has to be an array of FLOAT32_VEC3");
   }
 }
 
-void HdriLight::getInstances(std::vector<void *> &outInstances, mat4 transform)
+bool HdriLight::isValid() const
 {
-  rpr_light light;
-  CHECK(rprContextCreateEnvironmentLight(m_context, &light))
-  CHECK(rprEnvironmentLightSetImage(light, m_image))
-  CHECK(rprEnvironmentLightSetIntensityScale(light, m_scale))
-  mat4 upRotation      = calculateRotation(m_up, vec3(1, 0, 0));
-  mat4 dirRotation     = calculateRotation(m_direction, vec3(1, 0, 0));
-  mat4 transformResult = upRotation * dirRotation;
-  transformResult *= transform;
-  CHECK(rprLightSetTransform(light, false, value_ptr(transformResult)))
-  outInstances.push_back(light);
+  return m_radiance
+      && (m_radiance->elementType() == ANARI_FLOAT32_VEC3 || m_radiance->elementType() == ANARI_FLOAT32_VEC4)
+      && m_radiance->size(0) > 0 && m_radiance->size(1) > 0;
 }
 
-void HdriLight::clear()
+void HdriLight::attachToScene(rpr_scene, const mat4 &, SceneItems &)
 {
-  if (m_image)
+  // the environment light of a scene is created by the world
+}
+
+bool HdriLight::isEnvironmentLight() const
+{
+  return true;
+}
+
+size_t HdriLight::width() const
+{
+  return m_radiance->size(0);
+}
+
+size_t HdriLight::height() const
+{
+  return m_radiance->size(1);
+}
+
+float3 HdriLight::radiance(size_t x, size_t y) const
+{
+  const float4 value = readAttributeValue(m_radiance.get(), y * m_radiance->size(0) + x);
+  return float3(value.x, value.y, value.z) * m_color * m_scale;
+}
+
+mat4 HdriLight::orientation() const
+{
+  // local frame of the image: x points to the center of the image, z to its upper border
+  const float3 x = safeNormalize(m_direction, float3(1.f, 0.f, 0.f));
+  float3       y = linalg::cross(safeNormalize(m_up, float3(0.f, 0.f, 1.f)), x);
+  if (!(linalg::length(y) > 1e-6f))
   {
-    CHECK(rprObjectDelete(m_image))
-    m_image = nullptr;
+    float3 unused;
+    makeBasis(x, y, unused);
   }
-}
-
-HdriLight::~HdriLight()
-{
-  clear();
+  y              = linalg::normalize(y);
+  const float3 z = linalg::cross(x, y);
+  return frameMatrix(x, y, z, float3(0.f));
 }
 
 } // namespace anari::rpr

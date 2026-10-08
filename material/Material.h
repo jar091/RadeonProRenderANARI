@@ -15,23 +15,63 @@ limitations under the License.
 
 #include "../Object.h"
 #include "../rpr_common.h"
-#include "../scene/geometry/Geometry.h"
+#include "../sampler/Sampler.h"
+#include "MaterialGraph.h"
+// std
+#include <map>
+#include <memory>
 
 namespace anari {
 namespace rpr {
 
+// Parameter of a material: a constant value, the name of a geometry attribute or a sampler
+struct MaterialParameter
+{
+  explicit MaterialParameter(Object *material);
+
+  // reads the parameter 'name' of the material
+  void commit(const char *name, const float4 &defaultValue);
+
+  MaterialValue generateMaterial(MaterialGraph &graph) const;
+
+  bool isConstant() const;
+  bool isConstant(float value) const; // all color components are equal to 'value'
+
+ private:
+  Object                            *m_material{};
+  float4                             m_value{0.f, 0.f, 0.f, 1.f};
+  Attribute                          m_attribute{Attribute::NONE};
+  helium::ChangeObserverPtr<Sampler> m_sampler;
+};
+
 struct Material : public Object
 {
-  Material() = default;
-  static Material *createInstance(const char *type, rpr_material_system matsys);
+  explicit Material(RPRGlobalState *s);
+  static Material *createInstance(std::string_view type, RPRGlobalState *s);
 
-  virtual inline rpr_material_node generateMaterial(Geometry *geometry)
-  {
-    return nullptr;
-  };
+  void commitParameters() override;
+  void finalize() override;
+  void markFinalized() override;
+
+  // Returns the root node of the material for shapes with the given attributes. The nodes are owned
+  // by the material, they are valid until the material is finalized again.
+  rpr_material_node getMaterial(const AttributeContext &context);
+
+  // Creates the nodes of the material for shapes with the given attributes, they are owned by the caller.
+  std::unique_ptr<MaterialGraph> createMaterial(const AttributeContext &context) const;
 
  protected:
-  rpr_material_system m_matsys{};
+  virtual void generateMaterial(MaterialGraph &graph) const = 0;
+
+  // transparency of the uber material for an opacity value, depending on the alpha mode
+  MaterialValue generateTransparency(
+      MaterialGraph &graph, const MaterialValue &opacity, const MaterialValue &color) const;
+
+  AlphaMode m_alpha_mode{AlphaMode::OPAQUE};
+  float     m_alpha_cutoff{0.5f};
+
+ private:
+  std::map<AttributeContext, std::unique_ptr<MaterialGraph>> m_graphs;
 };
 
 } // namespace rpr

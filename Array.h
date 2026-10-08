@@ -15,150 +15,65 @@ limitations under the License.
 #pragma once
 
 #include "Object.h"
-// std
-#include <vector>
-// anari
-#include "anari/anari_cpp/Traits.h"
+// helium
+#include "helium/array/Array1D.h"
+#include "helium/array/Array2D.h"
+#include "helium/array/Array3D.h"
+#include "helium/array/ObjectArray.h"
 
 namespace anari {
 namespace rpr {
 
-enum class ArrayShape
+// Arrays are completely handled by helium (shared, captured and managed memory, mapping, privatization)
+
+using Array                   = helium::Array;
+using Array1D                 = helium::Array1D;
+using Array1DMemoryDescriptor = helium::Array1DMemoryDescriptor;
+using Array2D                 = helium::Array2D;
+using Array2DMemoryDescriptor = helium::Array2DMemoryDescriptor;
+using Array3D                 = helium::Array3D;
+using Array3DMemoryDescriptor = helium::Array3DMemoryDescriptor;
+using ObjectArray             = helium::ObjectArray;
+
+// Array parameters of objects. They return nullptr if the parameter is not an array of the expected kind.
+
+inline Array1D *getArray1D(const helium::ParameterizedObject *object, const std::string &name)
 {
-  ARRAY1D,
-  ARRAY2D,
-  ARRAY3D
-};
-
-struct Array : public Object
-{
-  Array(void *appMemory, ANARIMemoryDeleter deleter, void *deleterPtr, ANARIDataType elementType);
-  virtual ~Array();
-
-  ANARIDataType elementType() const;
-
-  void *map();
-  void  unmap();
-
-  template <typename T>
-  T *dataAs();
-
-  virtual ArrayShape shape() const = 0;
-
-  virtual void privatize() = 0;
-  bool         wasPrivatized() const;
-
- protected:
-  void makePrivatizedCopy(size_t numElements);
-  void freeAppMemory();
-
-  void              *m_mem{nullptr};
-  ANARIMemoryDeleter m_deleter{nullptr};
-  void              *m_deleterPtr{nullptr};
-
- private:
-  ANARIDataType m_elementType{ANARI_UNKNOWN};
-  bool          m_privatized{false};
-};
-
-struct Array1D : public Array
-{
-  Array1D(void *appMemory, ANARIMemoryDeleter deleter, void *deleterPtr, ANARIDataType type,
-      uint64_t numItems, uint64_t byteStride);
-
-  ArrayShape shape() const override;
-
-  size_t size() const;
-
-  void privatize() override;
-
- private:
-  size_t m_size{0};
-};
-
-struct Array2D : public Array
-{
-  Array2D(void *appMemory, ANARIMemoryDeleter deleter, void *deleterPtr, ANARIDataType type,
-      uint64_t numItems1, uint64_t numItems2, uint64_t byteStride1, uint64_t byteStride2);
-
-  ArrayShape shape() const override;
-
-  size_t size(int dim) const;
-  uvec2  size() const;
-
-  void privatize() override;
-
- private:
-  size_t m_size[2] = {0, 0};
-};
-
-struct Array3D : public Array
-{
-  Array3D(void *appMemory, ANARIMemoryDeleter deleter, void *deleterPtr, ANARIDataType type,
-      uint64_t numItems1, uint64_t numItems2, uint64_t numItems3, uint64_t byteStride1, uint64_t byteStride2,
-      uint64_t byteStride3);
-
-  ArrayShape shape() const override;
-
-  size_t size(int dim) const;
-  uvec3  size() const;
-
-  void privatize() override;
-
- private:
-  size_t m_size[3] = {0, 0, 0};
-};
-
-struct ObjectArray : public Array
-{
-  ObjectArray(void *appMemory, ANARIMemoryDeleter deleter, void *deleterPtr, ANARIDataType type,
-      uint64_t numItems, uint64_t byteStride);
-  ~ObjectArray();
-
-  ArrayShape shape() const override;
-
-  size_t size() const;
-
-  void privatize() override;
-
-  Object **handles();
-
-  void appendHandle(Object *);
-  void removeAppendedHandles();
-
- private:
-  std::vector<Object *> m_handleArray;
-  size_t                m_numAppended{0};
-};
-
-// Inlined definitions ////////////////////////////////////////////////////////
-
-template <typename T>
-inline T *Array::dataAs()
-{
-  assert(ANARITypeFor<T>::value == m_elementType);
-  return (T *)m_mem;
+  auto *array = getObjectParam<Array1D>(object, name, ANARI_ARRAY1D);
+  return array && !anari::isObject(array->elementType()) ? array : nullptr;
 }
 
-// Object specializations /////////////////////////////////////////////////////
-
-template <>
-inline ObjectArray *Object::getParamObject<ObjectArray>(const std::string &name, ObjectArray *valIfNotFound)
+inline Array2D *getArray2D(const helium::ParameterizedObject *object, const std::string &name)
 {
-  if (!hasParam(name))
-    return valIfNotFound;
+  return getObjectParam<Array2D>(object, name, ANARI_ARRAY2D);
+}
 
-  using PTR_T = IntrusivePtr<Array1D>;
-  PTR_T val   = getParam<PTR_T>(name, PTR_T());
-  return (ObjectArray *)val.ptr;
+inline Array3D *getArray3D(const helium::ParameterizedObject *object, const std::string &name)
+{
+  return getObjectParam<Array3D>(object, name, ANARI_ARRAY3D);
+}
+
+inline ObjectArray *getObjectArray(const helium::ParameterizedObject *object, const std::string &name)
+{
+  auto *array = getObjectParam<Array>(object, name, ANARI_ARRAY1D);
+  return array && anari::isObject(array->elementType()) ? (ObjectArray *)array : nullptr;
+}
+
+// Reads element 'i' of an array as attribute value, see the conversion rules of the ANARI specification
+inline float4 readAttributeValue(const Array1D *array, size_t i)
+{
+  return readAsAttributeValueFlat(array->begin(), array->elementType(), i);
+}
+
+inline float4 readAttributeValue(const Array2D *array, size_t i)
+{
+  return readAsAttributeValueFlat(array->data(), array->elementType(), i);
+}
+
+inline float4 readAttributeValue(const Array3D *array, size_t i)
+{
+  return readAsAttributeValueFlat(array->data(), array->elementType(), i);
 }
 
 } // namespace rpr
-
-ANARI_TYPEFOR_SPECIALIZATION(rpr::Array *, ANARI_ARRAY);
-ANARI_TYPEFOR_SPECIALIZATION(rpr::Array1D *, ANARI_ARRAY1D);
-ANARI_TYPEFOR_SPECIALIZATION(rpr::Array2D *, ANARI_ARRAY2D);
-ANARI_TYPEFOR_SPECIALIZATION(rpr::Array3D *, ANARI_ARRAY3D);
-ANARI_TYPEFOR_SPECIALIZATION(rpr::ObjectArray *, ANARI_ARRAY1D);
-
 } // namespace anari

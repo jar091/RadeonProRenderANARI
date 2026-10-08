@@ -13,26 +13,37 @@ limitations under the License.
 
 #pragma once
 
+#include "../Array.h"
 #include "../Object.h"
 #include "../rpr_common.h"
-#include "../RPRDevice.h"
 
 namespace anari {
 namespace rpr {
 
 struct Renderer : public Object
 {
-  explicit Renderer(rpr_context context);
-  static Renderer *createInstance(rpr_context context, const char *type);
-  ~Renderer() override;
+  explicit Renderer(RPRGlobalState *s);
+  static Renderer *createInstance(std::string_view type, RPRGlobalState *s);
 
-  void commit() override{};
-  void attachToScene(rpr_scene scene);
+  void commitParameters() override;
+
+  // sets the parameters of the RPR context which depend on the renderer
+  virtual void attachToContext() const;
+
+  // radiance of the ambient light
+  float3 ambientRadiance() const;
+  // background at a position of the image, (0, 0) is the lower left corner
+  float4 background(float u, float v) const;
+  bool   hasBackgroundImage() const;
+  // samples per pixel of one frame
+  int pixelSamples() const;
 
  protected:
-  rpr_context m_context;
-  rpr_image   m_background_image = nullptr;
-  int         m_pixel_samples    = 1;
+  float4                             m_background_color{0.f, 0.f, 0.f, 1.f};
+  helium::ChangeObserverPtr<Array2D> m_background_image;
+  float                              m_ambient_radiance{0.f};
+  float3                             m_ambient_color{1.f};
+  int                                m_pixel_samples{1};
 };
 
 } // namespace rpr

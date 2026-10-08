@@ -13,24 +13,30 @@ limitations under the License.
 
 #pragma once
 
-#include "../../Array.h"
-#include "../../rpr_common.h"
+#include "../../../Array.h"
 
 namespace anari::rpr {
 
-struct Attribute
+// Names of the attribute slots: "attribute0".."attribute3" and "color"
+const char *attributeName(int slot);
+
+// Describes where a material finds the attributes of the geometry it is applied on.
+//
+// The attributes which a geometry defines per vertex or per primitive are stored as primvars of the RPR
+// mesh, the key of a primvar is the attribute slot. Geometries which are a set of instances of one RPR
+// mesh (spheres) have one value per instance instead: the values are stored in a RPR buffer and the
+// object ID of an instance is its index in the buffer. All other attributes are constant for the whole
+// shape: either a uniform value of the geometry or of the instance, or the default value (0, 0, 0, 1).
+// A material graph is built for one attribute context, shapes with equal contexts share the graph.
+struct AttributeContext
 {
- public:
-  explicit Attribute(rpr_material_node materialNode);
-  Attribute() = default;
-  virtual ~Attribute();
+  // constant value of the attribute, without value the attribute is read from the buffer or, if there is
+  // no buffer, from the primvar of the shape
+  UniformAttributeSet constant;
+  // values of the attribute per object ID
+  std::array<rpr_buffer, NUM_ATTRIBUTES> buffer{};
 
-  static Attribute *fromType(rpr_material_system matsys, rpr_material_node_lookup_value type);
-  rpr_material_node getMaterial();
-  static vec4       processColor(Array1D *array, size_t index);
-
- protected:
-  rpr_material_node m_material{};
+  bool operator<(const AttributeContext &other) const;
 };
 
 } // namespace anari::rpr

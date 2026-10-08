@@ -15,61 +15,93 @@ limitations under the License.
 
 namespace anari::rpr {
 
-void StructuredRegularSpatialField::commit()
+StructuredRegularSpatialField::StructuredRegularSpatialField(RPRGlobalState *s) : SpatialField(s), m_data(this)
+{}
+
+void StructuredRegularSpatialField::commitParameters()
 {
-  auto *data   = getParamObject<Array3D>("data");
-  m_position   = getParam<vec3>("origin", vec3(0));
-  m_voxelSize  = getParam<vec3>("spacing", vec3(1));
-  m_filterType = processFilter(getParam<std::string>("filter", "linear"));
+  m_data      = getArray3D(this, "data");
+  m_position  = getParam<float3>("origin", float3(0.f));
+  m_voxelSize = getParam<float3>("spacing", float3(1.f));
+}
 
-  if (!data)
-    throw std::runtime_error("'data' parameter is required");
-
-  m_size = data->size();
+void StructuredRegularSpatialField::finalize()
+{
   resetBounds();
-  extendBounds(box3(m_position, m_position + (vec3(m_size) - 1.f) * m_voxelSize));
+  m_valid = false;
 
-  m_grid.clear();
-  m_indices.clear();
-  m_grid.reserve(m_size.x * m_size.y * m_size.z);
-  m_indices.reserve(m_size.x * m_size.y * m_size.z);
-
-  for (uint32_t x = 0; x < m_size.x; x++)
+  if (!m_data)
   {
-    for (uint32_t y = 0; y < m_size.y; y++)
-    {
-      for (uint32_t z = 0; z < m_size.z; z++)
-      {
-        processValue(uvec3(x, y, z), data);
-      }
-    }
+    reportMessage(ANARI_SEVERITY_WARNING, "'data' parameter is required");
+    return;
+  }
+
+  switch (m_data->elementType())
+  {
+  case ANARI_UINT8:
+  case ANARI_UFIXED8:
+  case ANARI_INT16:
+  case ANARI_UINT16:
+  case ANARI_UFIXED16:
+  case ANARI_FLOAT32:
+  case ANARI_FLOAT64:
+    break;
+  default:
+    reportMessage(ANARI_SEVERITY_WARNING, "unsupported element type %s of 'data' of structuredRegular field",
+        anari::toString(m_data->elementType()));
+    return;
+  }
+
+  const uint3 dims = m_data->size();
+  if (dims.x == 0 || dims.y == 0 || dims.z == 0)
+    return;
+
+  m_valid = true;
+  extendBounds(box3(m_position, m_position + (float3(dims) - 1.f) * m_voxelSize));
+}
+
+bool StructuredRegularSpatialField::isValid() const
+{
+  return m_valid;
+}
+
+uint3 StructuredRegularSpatialField::size() const
+{
+  return m_data->size();
+}
+
+float StructuredRegularSpatialField::value(size_t index) const
+{
+  const void *data = m_data->data();
+  switch (m_data->elementType())
+  {
+  case ANARI_UINT8:
+    return float(((const uint8_t *)data)[index]);
+  case ANARI_UFIXED8:
+    return float(((const uint8_t *)data)[index]) / 255.f;
+  case ANARI_INT16:
+    return float(((const int16_t *)data)[index]);
+  case ANARI_UINT16:
+    return float(((const uint16_t *)data)[index]);
+  case ANARI_UFIXED16:
+    return float(((const uint16_t *)data)[index]) / 65535.f;
+  case ANARI_FLOAT32:
+    return ((const float *)data)[index];
+  case ANARI_FLOAT64:
+    return float(((const double *)data)[index]);
+  default:
+    return 0.f;
   }
 }
 
-void StructuredRegularSpatialField::processValue(uvec3 position, Array3D *data)
+float3 StructuredRegularSpatialField::origin() const
 {
-  m_indices.push_back(position.x);
-  m_indices.push_back(position.y);
-  m_indices.push_back(position.z);
-  size_t element_number = position.x * m_size.y * m_size.z + position.y * m_size.z + position.z;
-  switch (data->elementType())
-  {
-  case ANARI_UINT8:
-    m_grid.push_back((rpr_float)data->dataAs<uint8>()[element_number]);
-    break;
-  case ANARI_INT16:
-    m_grid.push_back((rpr_float)data->dataAs<int16>()[element_number]);
-    break;
-  case ANARI_UINT16:
-    m_grid.push_back((rpr_float)data->dataAs<uint16>()[element_number]);
-    break;
-  case ANARI_FLOAT32:
-    m_grid.push_back((rpr_float)data->dataAs<float32>()[element_number]);
-    break;
-  case ANARI_FLOAT64:
-    m_grid.push_back((rpr_float)data->dataAs<float64>()[element_number]);
-    break;
-  }
+  return m_position;
+}
+
+float3 StructuredRegularSpatialField::spacing() const
+{
+  return m_voxelSize;
 }
 
 } // namespace anari::rpr

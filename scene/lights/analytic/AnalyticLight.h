@@ -17,13 +17,17 @@ limitations under the License.
 
 namespace anari::rpr {
 
+// Base of the lights which are RPR light objects
 struct AnalyticLight : public Light
 {
- public:
-  explicit AnalyticLight(rpr_context &context);
-  void attachToScene(rpr_scene scene, mat4 transform) override;
+  explicit AnalyticLight(RPRGlobalState *s);
 
  protected:
-  static float32 calculateSteradianAngle(float32 angle);
+  // sets the transformation of a new RPR light and attaches it to the scene
+  void attachLight(rpr_scene scene, rpr_light light, const mat4 &transform, SceneItems &items);
+
+  // solid angle of a cone with the given apex angle
+  static float calculateSteradianAngle(float angle);
 };
+
 } // namespace anari::rpr

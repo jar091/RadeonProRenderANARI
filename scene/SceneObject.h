@@ -1,5 +1,4 @@
 /**********************************************************************
-Copyright 2021 The Khronos Group
 Copyright 2022 Advanced Micro Devices, Inc
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,46 +17,65 @@ limitations under the License.
 
 namespace anari::rpr {
 
+// Base of all objects with a spatial extent
 struct SceneObject : public Object
 {
-  bool getProperty(const std::string &name, ANARIDataType type, void *ptr, ANARIWaitMask m) override;
+  SceneObject(ANARIDataType type, RPRGlobalState *s);
 
-  box3 bounds();
+  bool getProperty(
+      const std::string_view &name, ANARIDataType type, void *ptr, uint64_t size, uint32_t flags) override;
+
+  virtual box3 bounds() const;
+
+  // every change of a scene object requires an update of the RPR scene
+  void markFinalized() override;
 
  protected:
-  void extendBounds(box3 bounds);
+  void extendBounds(const box3 &bounds);
   void resetBounds();
 
-  box3 m_bounds{};
+  box3 m_bounds{emptyBox()};
 };
 
 // Inline SceneObject definitions
 
-inline box3 SceneObject::bounds()
+inline SceneObject::SceneObject(ANARIDataType type, RPRGlobalState *s) : Object(type, s) {}
+
+inline box3 SceneObject::bounds() const
 {
   return m_bounds;
 }
 
-inline void SceneObject::extendBounds(box3 bounds)
+inline void SceneObject::markFinalized()
 {
-  m_bounds.extend(bounds);
+  Object::markFinalized();
+  markSceneChanged();
+}
+
+inline void SceneObject::extendBounds(const box3 &bounds)
+{
+  if (!isEmpty(bounds))
+    m_bounds.extend(bounds);
 }
 
 inline void SceneObject::resetBounds()
 {
-  m_bounds = {vec3(std::numeric_limits<float>::max()), -vec3(std::numeric_limits<float>::max())};
+  m_bounds = emptyBox();
 }
 
 inline bool SceneObject::getProperty(
-    const std::string &name, ANARIDataType type, void *ptr, ANARIWaitMask mask)
+    const std::string_view &name, ANARIDataType type, void *ptr, uint64_t size, uint32_t flags)
 {
   if (name == "bounds" && type == ANARI_FLOAT32_BOX3)
   {
-    std::memcpy(ptr, &m_bounds, sizeof(m_bounds));
+    const box3 b = bounds();
+    if (isEmpty(b))
+      return false;
+    std::memcpy(ptr, &b, sizeof(b));
     return true;
   }
 
-  return Object::getProperty(name, type, ptr, mask);
+  return Object::getProperty(name, type, ptr, size, flags);
 }
 
 } // namespace anari::rpr

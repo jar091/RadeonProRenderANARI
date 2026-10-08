@@ -15,60 +15,65 @@ limitations under the License.
 
 namespace anari::rpr {
 
-Primitives::Primitives(rpr_context context, rpr_material_system materialSystem)
-    : Geometry(context, materialSystem)
-{}
+Primitives::Primitives(RPRGlobalState *s) : Geometry(s), m_vertices(this), m_indices(this) {}
 
-void Primitives::getInstances(std::vector<rpr_shape> &out_shapes, mat4 transform)
+void Primitives::commitParameters()
 {
-  for (int primitive_number = 0; primitive_number < m_num_primitives; primitive_number++)
+  Geometry::commitParameters();
+  m_vertices = getArray1D(this, "vertex.position");
+  m_indices  = getArray1D(this, "primitive.index");
+}
+
+size_t Primitives::checkVertices(const char *subtype)
+{
+  if (!m_vertices || m_vertices->elementType() != ANARI_FLOAT32_VEC3)
   {
-    rpr_shape instance = getPrimitive(primitive_number, transform);
-    CHECK(rprShapeSetObjectID(instance, primitive_number))
-    out_shapes.push_back(instance);
+    reportMessage(ANARI_SEVERITY_WARNING, "missing 'vertex.position' on %s geometry", subtype);
+    return 0;
+  }
+  return m_vertices->size();
+}
+
+const Array1D *Primitives::checkArray(
+    const Array1D *array, ANARIDataType elementType, size_t minSize, const char *name) const
+{
+  if (!array)
+    return nullptr;
+  if (array->elementType() != elementType || array->size() < minSize)
+  {
+    reportMessage(ANARI_SEVERITY_WARNING, "'%s' has to be an array of at least %zu %s, it is ignored", name,
+        minSize, anari::toString(elementType));
+    return nullptr;
+  }
+  return array;
+}
+
+void Primitives::prepareAttributes(MeshData &mesh, size_t numVertices, size_t numPrimitives)
+{
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
+  {
+    m_used_vertex_attributes[slot] =
+        checkAttributeArray(m_vertex_attributes[slot].get(), numVertices, "vertex", slot);
+    m_used_primitive_attributes[slot] = m_used_vertex_attributes[slot]
+        ? nullptr
+        : checkAttributeArray(m_primitive_attributes[slot].get(), numPrimitives, "primitive", slot);
+    mesh.has_attribute[slot] = m_used_vertex_attributes[slot] || m_used_primitive_attributes[slot];
   }
 }
 
-void Primitives::processAttributeArray(Array1D *data, Array1D *index, std::vector<vec4> &outVector)
+AttributeValues Primitives::attributeValues(size_t vertex, size_t primitive) const
 {
-  if (!data)
-    return;
-
-  size_t numVertex = index ? index->size() : data->size();
-  for (int indexNumber = 0; indexNumber < numVertex; indexNumber++)
+  AttributeValues values;
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
   {
-    uint32 primitiveIndex = index ? index->dataAs<uint32>()[indexNumber] : indexNumber;
-    outVector.emplace_back(Attribute::processColor(data, primitiveIndex));
+    if (m_used_vertex_attributes[slot])
+      values[slot] = readAttributeValue(m_used_vertex_attributes[slot], vertex);
+    else if (m_used_primitive_attributes[slot])
+      values[slot] = readAttributeValue(m_used_primitive_attributes[slot], primitive);
+    else
+      values[slot] = DEFAULT_ATTRIBUTE_VALUE;
   }
+  return values;
 }
 
-void Primitives::processAttributeParameters(Array1D *index)
-{
-  m_colors.clear();
-  m_attribute0.clear();
-  m_attribute1.clear();
-  m_attribute2.clear();
-  m_attribute3.clear();
-  processAttributeArray(getParamObject<Array1D>("vertex.color"), index, m_colors);
-  processAttributeArray(getParamObject<Array1D>("vertex.attribute0"), index, m_attribute0);
-  processAttributeArray(getParamObject<Array1D>("vertex.attribute1"), index, m_attribute1);
-  processAttributeArray(getParamObject<Array1D>("vertex.attribute2"), index, m_attribute2);
-  processAttributeArray(getParamObject<Array1D>("vertex.attribute3"), index, m_attribute3);
-}
-
-bool Primitives::hasAttribute(const char *name)
-{
-  {
-    if ((std::strcmp(name, "color") == 0 && !m_colors.empty())
-        || (std::strcmp(name, "attribute0") == 0 && !m_attribute0.empty())
-        || (std::strcmp(name, "attribute1") == 0 && !m_attribute1.empty())
-        || (std::strcmp(name, "attribute2") == 0 && !m_attribute2.empty())
-        || (std::strcmp(name, "attribute3") == 0 && !m_attribute3.empty())
-        || std::strcmp(name, "primitiveId") == 0)
-    {
-      return true;
-    }
-    return Geometry::hasAttribute(name);
-  }
-}
 } // namespace anari::rpr

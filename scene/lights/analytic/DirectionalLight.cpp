@@ -15,35 +15,40 @@ limitations under the License.
 
 namespace anari::rpr {
 
-DirectionalLight::DirectionalLight(rpr_context context) : AnalyticLight(context) {}
+// 'radiant power' of a RPR directional light for an irradiance of 1 W/m^2
+constexpr float RPR_DIRECTIONAL_POWER_PER_IRRADIANCE = 1.f;
 
-void DirectionalLight::commit()
+DirectionalLight::DirectionalLight(RPRGlobalState *s) : AnalyticLight(s) {}
+
+void DirectionalLight::commitParameters()
 {
-  Light::commit();
-  m_direction       = getParam<vec3>("direction", vec3(0, 0, -1));
-  auto irradiance   = getParam<float32>("irradiance", 1.f);
-  m_angularDiameter = getParam<float32>("angularDiameter", 0.f);
-  auto radiance     = getParam<float32>("radiance", 1.f);
+  Light::commitParameters();
+  m_direction       = getParam<float3>("direction", float3(0.f, 0.f, -1.f));
+  m_angularDiameter = getParam<float>("angularDiameter", 0.f);
 
   if (hasParam("irradiance") || !hasParam("radiance"))
   {
-    m_power = irradiance;
+    m_irradiance = getParam<float>("irradiance", 1.f);
   } else
   {
-    m_power = radiance * m_angularDiameter;
+    // radiance of the visible disk of the light. The disk of a light without angular diameter has no
+    // area, the value is taken as irradiance then.
+    const float radiance = getParam<float>("radiance", 1.f);
+    m_irradiance = m_angularDiameter > 0.f ? radiance * calculateSteradianAngle(m_angularDiameter) : radiance;
   }
 }
 
-void DirectionalLight::getInstances(std::vector<void *> &outInstances, mat4 transform)
+void DirectionalLight::attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items)
 {
-  rpr_light light;
-  CHECK(rprContextCreateDirectionalLight(m_context, &light))
-  CHECK(rprDirectionalLightSetRadiantPower3f(
-      light, m_color.r * m_power, m_color.g * m_power, m_color.b * m_power))
-  CHECK(rprDirectionalLightSetShadowSoftnessAngle(light, m_angularDiameter))
-  mat4 transformResult = calculateRotation(m_direction) * transform;
-  CHECK(rprLightSetTransform(light, false, value_ptr(transformResult)))
-  outInstances.push_back(light);
+  rpr_light light = nullptr;
+  CHECK(rprContextCreateDirectionalLight(deviceState()->context, &light))
+  if (!light)
+    return;
+  const float3 power = m_color * m_irradiance * RPR_DIRECTIONAL_POWER_PER_IRRADIANCE;
+  CHECK(rprDirectionalLightSetRadiantPower3f(light, power.x, power.y, power.z))
+  // RPR limits the angle of the soft shadows to pi/4
+  CHECK(rprDirectionalLightSetShadowSoftnessAngle(light, std::min(m_angularDiameter * 0.5f, pi / 4.f)))
+  attachLight(scene, light, linalg::mul(transform, rotationFromDirection(m_direction)), items);
 }
 
 } // namespace anari::rpr

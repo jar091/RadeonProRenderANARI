@@ -15,42 +15,43 @@ limitations under the License.
 
 namespace anari::rpr {
 
-SpotLight::SpotLight(rpr_context context) : AnalyticLight(context) {}
+// The 'radiant power' of a RPR spot light is its radiant intensity in W/sr in the center of the cone
+// (measured with a diffuse plane).
 
-void SpotLight::commit()
+SpotLight::SpotLight(RPRGlobalState *s) : AnalyticLight(s) {}
+
+void SpotLight::commitParameters()
 {
-  Light::commit();
-  m_position        = getParam<vec3>("position", vec3(0));
-  m_direction       = getParam<vec3>("direction", vec3(0, 0, -1));
-  m_outerAngle      = getParam<float32>("openingAngle", pi<float32>());
-  auto falloffAngle = getParam<float32>("falloffAngle", 0.1f);
-  auto intensity    = getParam<float32>("intensity", 1.f);
-  auto power        = getParam<float32>("power", 1.f);
-
-  m_innerAngle = m_outerAngle - 2 * falloffAngle;
+  Light::commitParameters();
+  m_position     = getParam<float3>("position", float3(0.f));
+  m_direction    = getParam<float3>("direction", float3(0.f, 0.f, -1.f));
+  m_openingAngle = std::clamp(getParam<float>("openingAngle", pi), 0.f, 2.f * pi);
+  m_falloffAngle = std::clamp(getParam<float>("falloffAngle", 0.1f), 0.f, m_openingAngle * 0.5f);
 
   if (hasParam("intensity") || !hasParam("power"))
   {
-    m_power = intensity * calculateSteradianAngle(m_outerAngle);
+    m_intensity = getParam<float>("intensity", 1.f);
   } else
   {
-    m_power = power;
+    // the power is emitted into the cone
+    const float solidAngle = calculateSteradianAngle(m_openingAngle);
+    m_intensity            = solidAngle > 0.f ? getParam<float>("power", 1.f) / solidAngle : 0.f;
   }
 }
 
-void SpotLight::getInstances(std::vector<void *> &outInstances, mat4 transform)
+void SpotLight::attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items)
 {
-  rpr_light light;
-  CHECK(rprContextCreateSpotLight(m_context, &light))
-  CHECK(rprSpotLightSetConeShape(light, m_innerAngle, m_outerAngle))
-  CHECK(rprSpotLightSetRadiantPower3f(light, m_color.r * m_power, m_color.g * m_power, m_color.b * m_power))
-
-  mat4 translation     = translate(mat4(1), m_position);
-  mat4 rotation        = calculateRotation(m_direction);
-  mat4 transformResult = translation * rotation;
-  transformResult *= transform;
-  CHECK(rprLightSetTransform(light, false, value_ptr(transformResult)))
-  outInstances.push_back(light);
+  rpr_light light = nullptr;
+  CHECK(rprContextCreateSpotLight(deviceState()->context, &light))
+  if (!light)
+    return;
+  const float3 power = m_color * m_intensity;
+  CHECK(rprSpotLightSetRadiantPower3f(light, power.x, power.y, power.z))
+  // RPR takes the angles between the axis and the inner and the outer border of the penumbra
+  const float outerAngle = m_openingAngle * 0.5f;
+  const float innerAngle = outerAngle - m_falloffAngle;
+  CHECK(rprSpotLightSetConeShape(light, innerAngle, outerAngle))
+  attachLight(scene, light, linalg::mul(transform, rotationFromDirection(m_direction, m_position)), items);
 }
 
 } // namespace anari::rpr

@@ -19,15 +19,14 @@ namespace anari::rpr {
 
 struct PointLight : public AnalyticLight
 {
- public:
-  explicit PointLight(rpr_context context);
-  void commit() override;
-  void getInstances(std::vector<void *> &outInstances, mat4 transform) override;
+  explicit PointLight(RPRGlobalState *s);
+  void commitParameters() override;
+  void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) override;
 
  private:
-  vec3    m_position{};
-  float32 m_power{};
-  float32 m_radius{};
+  float3 m_position{0.f};
+  float  m_radius{0.f};
+  float  m_intensity{1.f}; // W/sr
 };
 
 } // namespace anari::rpr

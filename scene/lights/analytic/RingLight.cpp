@@ -15,49 +15,62 @@ limitations under the License.
 
 namespace anari::rpr {
 
-RingLight::RingLight(rpr_context context) : AnalyticLight(context) {}
+// The 'radiant power' of a RPR disk light is the radiance of the disk in W/sr/m^2, the one of a RPR
+// spot light is its radiant intensity in W/sr (both were measured with a diffuse plane).
 
-void RingLight::commit()
+RingLight::RingLight(RPRGlobalState *s) : AnalyticLight(s) {}
+
+void RingLight::commitParameters()
 {
-  Light::commit();
-  m_position        = getParam<vec3>("position", vec3(0));
-  m_direction       = getParam<vec3>("direction", vec3(0, 0, -1));
-  m_outerAngle      = getParam<float32>("openingAngle", pi<float32>());
-  m_radius          = getParam<float32>("radius", 0);
-  auto intensity    = getParam<float32>("intensity", 1.f);
-  auto power        = getParam<float32>("power", 1.f);
-  auto radiance     = getParam<float32>("radiance", 1.f);
-  auto falloffAngle = getParam<float32>("falloffAngle", 0.1f);
+  Light::commitParameters();
+  m_position     = getParam<float3>("position", float3(0.f));
+  m_direction    = getParam<float3>("direction", float3(0.f, 0.f, -1.f));
+  m_openingAngle = std::clamp(getParam<float>("openingAngle", pi), 0.f, 2.f * pi);
+  m_falloffAngle = std::clamp(getParam<float>("falloffAngle", 0.1f), 0.f, m_openingAngle * 0.5f);
+  m_radius       = std::max(getParam<float>("radius", 0.f), 0.f);
 
-  m_innerAngle = m_outerAngle - 2 * falloffAngle;
+  if (hasParam("innerRadius"))
+    reportMessage(ANARI_SEVERITY_INFO, "parameter 'innerRadius' of ring light is not supported");
 
-  if (hasParam("intensity") || !(hasParam("power") || !hasParam("radiance")))
+  if (hasParam("intensity") || (!hasParam("power") && !hasParam("radiance")))
   {
-    m_power = intensity;
-  } else if (hasParam("power") || !hasParam("radiance"))
+    m_intensity = getParam<float>("intensity", 1.f);
+  } else if (hasParam("power"))
   {
-    m_power = power;
+    const float solidAngle = calculateSteradianAngle(m_openingAngle);
+    m_intensity            = solidAngle > 0.f ? getParam<float>("power", 1.f) / solidAngle : 0.f;
   } else
   {
-    float32 area = pi<float32>() * m_radius * m_radius;
-    m_power      = radiance * area;
+    m_intensity = getParam<float>("radiance", 1.f) * pi * m_radius * m_radius;
   }
 }
 
-void RingLight::getInstances(std::vector<void *> &outInstances, mat4 transform)
+void RingLight::attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items)
 {
-  rpr_light light;
-  CHECK(rprContextCreateDiskLight(m_context, &light))
-  CHECK(rprDiskLightSetRadius(light, m_radius))
-  CHECK(rprDiskLightSetAngle(light, m_outerAngle))
-  CHECK(rprDiskLightSetInnerAngle(light, m_innerAngle))
-  CHECK(rprDiskLightSetRadiantPower3f(light, m_color.r * m_power, m_color.g * m_power, m_color.b * m_power))
-
-  mat4 translation     = translate(mat4(1), m_position);
-  mat4 rotation        = calculateRotation(m_direction);
-  mat4 transformResult = translation * rotation;
-  transformResult *= transform;
-  CHECK(rprLightSetTransform(light, false, value_ptr(transformResult)))
-  outInstances.push_back(light);
+  rpr_light   light      = nullptr;
+  const float outerAngle = m_openingAngle * 0.5f;
+  if (m_radius > 0.f)
+  {
+    CHECK(rprContextCreateDiskLight(deviceState()->context, &light))
+    if (!light)
+      return;
+    // a disk with the radiance L has the intensity L * pi * r^2 in the direction of its normal
+    const float3 power = m_color * m_intensity / (pi * m_radius * m_radius);
+    CHECK(rprDiskLightSetRadius(light, m_radius))
+    CHECK(rprDiskLightSetAngle(light, outerAngle))
+    CHECK(rprDiskLightSetInnerAngle(light, outerAngle - m_falloffAngle))
+    CHECK(rprDiskLightSetRadiantPower3f(light, power.x, power.y, power.z))
+  } else
+  {
+    // a ring without radius is a spot light
+    CHECK(rprContextCreateSpotLight(deviceState()->context, &light))
+    if (!light)
+      return;
+    const float3 power = m_color * m_intensity;
+    CHECK(rprSpotLightSetRadiantPower3f(light, power.x, power.y, power.z))
+    CHECK(rprSpotLightSetConeShape(light, outerAngle - m_falloffAngle, outerAngle))
+  }
+  attachLight(scene, light, linalg::mul(transform, rotationFromDirection(m_direction, m_position)), items);
 }
+
 } // namespace anari::rpr

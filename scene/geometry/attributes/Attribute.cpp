@@ -15,44 +15,31 @@ limitations under the License.
 
 namespace anari::rpr {
 
-Attribute::Attribute(rpr_material_node materialNode) : m_material(materialNode) {}
-
-rpr_material_node Attribute::getMaterial()
+const char *attributeName(int slot)
 {
-  return m_material;
+  static const char *names[NUM_ATTRIBUTES] = {"attribute0", "attribute1", "attribute2", "attribute3", "color"};
+  return slot >= 0 && slot < NUM_ATTRIBUTES ? names[slot] : "";
 }
 
-Attribute::~Attribute()
+bool AttributeContext::operator<(const AttributeContext &other) const
 {
-  if (m_material)
+  for (int i = 0; i < NUM_ATTRIBUTES; i++)
   {
-    CHECK(rprObjectDelete(m_material))
+    if (buffer[i] != other.buffer[i])
+      return buffer[i] < other.buffer[i];
+    const auto &a = constant[i];
+    const auto &b = other.constant[i];
+    if (a.has_value() != b.has_value())
+      return !a.has_value();
+    if (!a.has_value())
+      continue;
+    for (int c = 0; c < 4; c++)
+    {
+      if ((*a)[c] != (*b)[c])
+        return (*a)[c] < (*b)[c];
+    }
   }
-}
-
-Attribute *Attribute::fromType(rpr_material_system matsys, rpr_material_node_lookup_value type)
-{
-  rpr_material_node materialNode;
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_INPUT_LOOKUP, &materialNode))
-  CHECK(rprMaterialNodeSetInputUByKey(materialNode, RPR_MATERIAL_INPUT_VALUE, type))
-  return new Attribute(materialNode);
-}
-
-vec4 Attribute::processColor(Array1D *array, size_t index)
-{
-  switch (array->elementType())
-  {
-  case ANARI_FLOAT32:
-    return {array->dataAs<float32>()[index], 0, 0, 1};
-  case ANARI_FLOAT32_VEC2:
-    return {array->dataAs<vec2>()[index], 0, 1};
-  case ANARI_FLOAT32_VEC3:
-    return {array->dataAs<vec3>()[index], 1};
-  case ANARI_FLOAT32_VEC4:
-    return array->dataAs<vec4>()[index];
-  default:
-    throw std::runtime_error("Unsupported data type");
-  }
+  return false;
 }
 
 } // namespace anari::rpr

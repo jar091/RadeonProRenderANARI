@@ -13,172 +13,154 @@ limitations under the License.
 
 #include "Quad.h"
 #include "Triangles.h"
+// std
+#include <numeric>
 
 namespace anari::rpr {
 
-Mesh::Mesh(rpr_context context, rpr_material_system materialSystem) : Geometry(context, materialSystem) {}
+Mesh::Mesh(RPRGlobalState *s, int polySize)
+    : Geometry(s), m_poly_size(polySize), m_index(this), m_vertex_position(this), m_vertex_normal(this)
+{}
 
-void Mesh::getInstances(std::vector<rpr_shape> &out_shapes, mat4 transform)
+void Mesh::commitParameters()
 {
-  rpr_shape instance;
-  CHECK(rprContextCreateInstance(m_context, m_base_shape, &instance))
-  CHECK(rprShapeSetTransform(instance, false, value_ptr(transform)))
-  out_shapes.push_back(instance);
+  Geometry::commitParameters();
+  m_index           = getArray1D(this, "primitive.index");
+  m_vertex_position = getArray1D(this, "vertex.position");
+  m_vertex_normal   = getArray1D(this, "vertex.normal");
 }
 
-template <typename vecType, int polySize>
-void Mesh::meshCommit(vecType defaultVector)
+void Mesh::finalize()
 {
-  auto index_data  = getParamObject<Array1D>("primitive.index");
-  auto normal_data = getParamObject<Array1D>("vertex.normal");
-  auto vertex_data = getParamObject<Array1D>("vertex.position");
+  clearMesh();
 
-  if (!vertex_data)
-    throw std::runtime_error("required 'vertex.position' data array is missed or have incorrect type!");
-
-  calculateBounds(vertex_data);
-
-  // process indices
-  rpr_int             *index;
-  std::size_t          num_faces;
-  std::vector<vecType> default_index;
-
-  if (index_data)
+  if (!m_vertex_position || m_vertex_position->elementType() != ANARI_FLOAT32_VEC3)
   {
-    num_faces = index_data->size();
-    index     = (rpr_int *)index_data->dataAs<vecType>();
-  } else // 'index_data' array is missed. We should use default indices
-  {
-    default_index.reserve(vertex_data->size() / polySize);
-    for (uint32_t i = 0; i < vertex_data->size(); i += polySize)
-    {
-      default_index.push_back(defaultVector + i);
-    }
-    num_faces = default_index.size();
-    index     = (rpr_int *)default_index.data();
-  }
-  std::vector<rpr_int> faces(num_faces, polySize);
-
-  // process normals
-  rpr_float *normal         = normal_data ? (rpr_float *)normal_data->dataAs<vec3>() : nullptr;
-  size_t     num_normals    = normal_data ? normal_data->size() : 0;
-  size_t     normal_stride  = normal_data ? sizeof(rpr_float) * 3 : 0;
-  rpr_int   *normal_indices = normal_data ? index : nullptr;
-  size_t     nidx_stride    = normal_data ? sizeof(rpr_int) : 0;
-
-  CHECK(rprContextCreateMesh(m_context, (rpr_float *)vertex_data->dataAs<vec3>(), vertex_data->size(),
-      sizeof(rpr_float) * 3, normal, num_normals, normal_stride, nullptr, 0, 0, index, sizeof(rpr_int),
-      normal_indices, nidx_stride, nullptr, 0, faces.data(), num_faces, &m_base_shape))
-
-  processAttributes(vertex_data);
-
-  CHECK(rprShapeSetVisibility(m_base_shape, false)) // base shape is always invisible
-}
-
-Attribute *Mesh::getAttribute(const char *name)
-{
-  Attribute *attribute = Geometry::getAttribute(name);
-  if (attribute)
-    return attribute;
-  if (std::strcmp(name, "attribute0") == 0)
-    return createPrimVarAttribute(0, name);
-  if (std::strcmp(name, "attribute1") == 0)
-    return createPrimVarAttribute(1, name);
-  if (std::strcmp(name, "attribute2") == 0)
-    return createPrimVarAttribute(2, name);
-  if (std::strcmp(name, "attribute3") == 0)
-    return createPrimVarAttribute(3, name);
-  if (std::strcmp(name, "color") == 0)
-    return createPrimVarAttribute(4, name);
-  return nullptr;
-}
-
-bool Mesh::hasAttribute(const char *name)
-{
-  if (std::strcmp(name, "color") == 0 || std::strcmp(name, "attribute0") == 0
-      || std::strcmp(name, "attribute1") == 0 || std::strcmp(name, "attribute2") == 0
-      || std::strcmp(name, "attribute3") == 0)
-  {
-    return true;
-  }
-  return Geometry::hasAttribute(name);
-}
-
-void Mesh::calculateBounds(Array1D *vertex_data)
-{
-  resetBounds();
-
-  for (int i = 0; i < vertex_data->size() * 3; i++)
-  {
-    float coordinate = ((float *)vertex_data->dataAs<vec3>())[i];
-    if (i % 3 == 0)
-    { // x coordinate
-      m_bounds.upper.x = max(m_bounds.upper.x, coordinate);
-      m_bounds.lower.x = min(m_bounds.lower.x, coordinate);
-    }
-    if (i % 3 == 1)
-    { // y coordinate
-      m_bounds.upper.y = max(m_bounds.upper.y, coordinate);
-      m_bounds.lower.y = min(m_bounds.lower.y, coordinate);
-    }
-    if (i % 3 == 2)
-    { // z coordinate
-      m_bounds.upper.z = max(m_bounds.upper.z, coordinate);
-      m_bounds.lower.z = min(m_bounds.lower.z, coordinate);
-    }
-  }
-}
-
-void Mesh::processAttributeArray(Array1D *data, int key)
-{
-  if (!data)
-  {
+    reportMessage(ANARI_SEVERITY_WARNING,
+        "required 'vertex.position' data array is missed or have incorrect type!");
     return;
   }
-  std::vector<vec4> attributeData;
-  attributeData.reserve(data->size());
-  for (int i = 0; i < data->size(); i++)
+
+  const size_t  numVertices = m_vertex_position->size();
+  const float3 *positions   = m_vertex_position->beginAs<float3>();
+
+  // process indices
+  const ANARIDataType  indexType = m_poly_size == 3 ? ANARI_UINT32_VEC3 : ANARI_UINT32_VEC4;
+  const rpr_int       *index     = nullptr;
+  size_t               numFaces  = 0;
+  std::vector<rpr_int> defaultIndex;
+
+  if (m_index && m_index->elementType() == indexType)
   {
-    attributeData.emplace_back(Attribute::processColor(data, i));
+    numFaces = m_index->size();
+    index    = (const rpr_int *)m_index->begin();
+    for (size_t i = 0; i < numFaces * m_poly_size; i++)
+    {
+      if (uint32_t(index[i]) >= numVertices)
+      {
+        reportMessage(ANARI_SEVERITY_WARNING, "'primitive.index' refers to a vertex which does not exist");
+        return;
+      }
+    }
+  } else // 'primitive.index' array is missed. We should use default indices
+  {
+    if (m_index)
+    {
+      reportMessage(ANARI_SEVERITY_WARNING, "'primitive.index' has to be an array of %s, it is ignored",
+          anari::toString(indexType));
+    }
+    numFaces = numVertices / m_poly_size;
+    defaultIndex.resize(numFaces * m_poly_size);
+    std::iota(defaultIndex.begin(), defaultIndex.end(), 0);
+    index = defaultIndex.data();
   }
-  CHECK(rprShapeSetPrimvar(m_base_shape, key, (rpr_float *)attributeData.data(), attributeData.size() * 4, 4,
-      RPR_PRIMVAR_INTERPOLATION_VERTEX))
-}
 
-void Mesh::processAttributes(Array1D *vertex_data)
-{
-  auto color_data      = getParamObject<Array1D>("vertex.color");
-  auto attribute0_data = getParamObject<Array1D>("vertex.attribute0");
-  auto attribute1_data = getParamObject<Array1D>("vertex.attribute1");
-  auto attribute2_data = getParamObject<Array1D>("vertex.attribute2");
-  auto attribute3_data = getParamObject<Array1D>("vertex.attribute3");
+  // process normals
+  const float3 *normals = nullptr;
+  if (m_vertex_normal)
+  {
+    if (m_vertex_normal->elementType() == ANARI_FLOAT32_VEC3 && m_vertex_normal->size() >= numVertices)
+      normals = m_vertex_normal->beginAs<float3>();
+    else
+      reportMessage(ANARI_SEVERITY_WARNING, "'vertex.normal' has incorrect type or size, it is ignored");
+  }
 
-  checkArraySizes(color_data, vertex_data->size(),
-      std::runtime_error("'vertex.position' and 'vertex.color' sizes are incompatible"));
-  checkArraySizes(attribute0_data, vertex_data->size(),
-      std::runtime_error("'vertex.position' and 'vertex.attribute0' sizes are incompatible"));
-  checkArraySizes(attribute1_data, vertex_data->size(),
-      std::runtime_error("'vertex.position' and 'vertex.attribute1' sizes are incompatible"));
-  checkArraySizes(attribute2_data, vertex_data->size(),
-      std::runtime_error("'vertex.position' and 'vertex.attribute2' sizes are incompatible"));
-  checkArraySizes(attribute3_data, vertex_data->size(),
-      std::runtime_error("'vertex.position' and 'vertex.attribute3' sizes are incompatible"));
+  // process attributes
+  std::array<const Array1D *, NUM_ATTRIBUTES> vertexAttributes{};
+  std::array<const Array1D *, NUM_ATTRIBUTES> primitiveAttributes{};
+  bool                                        hasPrimitiveAttributes = false;
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
+  {
+    vertexAttributes[slot] = checkAttributeArray(m_vertex_attributes[slot].get(), numVertices, "vertex", slot);
+    if (!vertexAttributes[slot])
+    {
+      primitiveAttributes[slot] =
+          checkAttributeArray(m_primitive_attributes[slot].get(), numFaces, "primitive", slot);
+      hasPrimitiveAttributes |= primitiveAttributes[slot] != nullptr;
+    }
+  }
 
-  processAttributeArray(attribute0_data, 0);
-  processAttributeArray(attribute1_data, 1);
-  processAttributeArray(attribute2_data, 2);
-  processAttributeArray(attribute3_data, 3);
-  processAttributeArray(color_data, 4);
-}
+  if (!hasPrimitiveAttributes)
+  {
+    MeshView mesh;
+    mesh.positions    = positions;
+    mesh.num_vertices = numVertices;
+    mesh.normals      = normals;
+    mesh.indices      = index;
+    mesh.num_faces    = numFaces;
+    mesh.face_size    = m_poly_size;
 
-void Triangles::commit()
-{
-  Mesh::meshCommit<uvec3, 3>(uvec3(0, 1, 2));
-}
+    std::array<std::vector<float4>, NUM_ATTRIBUTES> converted;
+    for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
+    {
+      const Array1D *array = vertexAttributes[slot];
+      if (!array)
+        continue;
+      if (array->elementType() == ANARI_FLOAT32_VEC4)
+      {
+        mesh.attributes[slot] = array->beginAs<float4>();
+        continue;
+      }
+      converted[slot].resize(numVertices);
+      for (size_t i = 0; i < numVertices; i++)
+        converted[slot][i] = readAttributeValue(array, i);
+      mesh.attributes[slot] = converted[slot].data();
+    }
+    setMesh(mesh);
+    return;
+  }
 
-void Quad::commit()
-{
-  Mesh::meshCommit<uvec4, 4>(uvec4(0, 1, 2, 3));
+  // RPR interpolates all primvars of a mesh the same way: vertices are not shared between the faces
+  // if there are attributes per primitive
+  MeshData     data;
+  const size_t numCorners = numFaces * m_poly_size;
+  data.face_size          = m_poly_size;
+  data.positions.resize(numCorners);
+  if (normals)
+    data.normals.resize(numCorners);
+  data.indices.resize(numCorners);
+  std::iota(data.indices.begin(), data.indices.end(), 0);
+  for (size_t i = 0; i < numCorners; i++)
+  {
+    data.positions[i] = positions[index[i]];
+    if (normals)
+      data.normals[i] = normals[index[i]];
+  }
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
+  {
+    if (vertexAttributes[slot])
+    {
+      data.attributes[slot].resize(numCorners);
+      for (size_t i = 0; i < numCorners; i++)
+        data.attributes[slot][i] = readAttributeValue(vertexAttributes[slot], index[i]);
+    } else if (primitiveAttributes[slot])
+    {
+      data.attributes[slot].resize(numCorners);
+      for (size_t i = 0; i < numCorners; i++)
+        data.attributes[slot][i] = readAttributeValue(primitiveAttributes[slot], i / m_poly_size);
+    }
+  }
+  setMesh(data.view());
 }
 
 } // namespace anari::rpr

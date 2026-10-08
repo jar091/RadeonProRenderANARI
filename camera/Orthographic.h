@@ -20,8 +20,13 @@ namespace anari::rpr {
 struct Orthographic : public Camera
 {
  public:
-  explicit Orthographic(rpr_camera camera);
-  void commit() override;
+  explicit Orthographic(RPRGlobalState *s);
+  void  commitParameters() override;
+  void  finalize() override;
+  float depth(const float3 &point) const override;
+
+ private:
+  float m_height{1.f};
 };
 
 } // namespace anari::rpr

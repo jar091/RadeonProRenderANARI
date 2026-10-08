@@ -12,7 +12,9 @@ limitations under the License.
 ********************************************************************/
 
 #pragma once
+
 #include "../SceneObject.h"
+#include "../geometry/Surface.h"
 
 namespace anari {
 namespace rpr {
@@ -20,27 +22,11 @@ namespace rpr {
 struct Volume : public SceneObject
 {
  public:
-  Volume(rpr_context context, rpr_material_system matsys);
-  ~Volume() override;
+  explicit Volume(RPRGlobalState *s);
+  static Volume *createInstance(std::string_view type, RPRGlobalState *s);
 
-  static Volume *createInstance(const char *type, rpr_context context, rpr_material_system matsys);
-  void           commit() override;
-  void           attachToScene(rpr_scene scene, mat4 transform = mat4(1));
-
- protected:
-  virtual mat4 getVolumeTransform()
-  {
-    return mat4(1);
-  };
-
-  rpr_context         m_context;
-  rpr_material_system m_matsys;
-  rpr_material_node   m_volume_material{};
-
- private:
-  void clear();
-
-  std::vector<rpr_shape> m_instances;
+  // creates the RPR shape of the volume for an instance and attaches it to the scene
+  virtual void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) = 0;
 };
 
 } // namespace rpr

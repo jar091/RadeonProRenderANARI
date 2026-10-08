@@ -15,37 +15,52 @@ limitations under the License.
 #include "image/Image1D.h"
 #include "image/Image2D.h"
 #include "image/Image3D.h"
-#include "PrimitiveSampler.h"
 #include "TransformSampler.h"
 
 namespace anari {
 namespace rpr {
 
-Sampler::Sampler(rpr_context context, rpr_material_system matsys) : m_context(context), m_matsys(matsys) {}
+Sampler::Sampler(RPRGlobalState *s) : Object(ANARI_SAMPLER, s) {}
 
-Sampler *Sampler::createInstance(const char *type, rpr_context context, rpr_material_system matsys)
+Sampler *Sampler::createInstance(std::string_view type, RPRGlobalState *s)
 {
-  if (strcmp(type, "image1D") == 0)
+  if (type == "image1D")
   {
-    return new Image1D(context, matsys);
+    return new Image1D(s);
   }
-  if (strcmp(type, "image2D") == 0)
+  if (type == "image2D")
   {
-    return new Image2D(context, matsys);
+    return new Image2D(s);
   }
-  if (strcmp(type, "image3D") == 0)
+  if (type == "image3D")
   {
-    return new Image3D(context, matsys);
+    return new Image3D(s);
   }
-  if (strcmp(type, "transform") == 0)
+  if (type == "transform")
   {
-    return new TransformSampler(context, matsys);
+    return new TransformSampler(s);
   }
-  if (strcmp(type, "primitive") == 0)
+  // the 'primitive' sampler is not supported: RPR materials can not look up the index of a primitive
+  return (Sampler *)new UnknownObject(ANARI_SAMPLER, type, s);
+}
+
+void Sampler::commitParameters()
+{
+  const std::string attribute = getParamString("inAttribute", "attribute0");
+  m_input_attribute           = attributeFromString(attribute);
+  if (m_input_attribute == Attribute::NONE)
   {
-    return new PrimitiveSampler(context, matsys);
+    reportMessage(ANARI_SEVERITY_WARNING, "unsupported value '%s' of sampler parameter 'inAttribute'",
+        attribute.c_str());
   }
-  throw std::runtime_error("cannot create sampler");
+  m_output_transform = getParam<mat4>("outTransform", mat4(linalg::identity));
+  m_output_offset    = getParam<float4>("outOffset", float4(0.f));
+}
+
+void Sampler::markFinalized()
+{
+  Object::markFinalized();
+  markSceneChanged();
 }
 
 } // namespace rpr

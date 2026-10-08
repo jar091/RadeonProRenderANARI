@@ -19,43 +19,97 @@ limitations under the License.
 namespace anari {
 namespace rpr {
 
-Camera::Camera(rpr_camera &camera) : m_camera(camera) {}
+Camera::Camera(RPRGlobalState *s) : Object(ANARI_CAMERA, s) {}
 
-Camera *Camera::createInstance(rpr_context &context, const char *type)
+Camera *Camera::createInstance(std::string_view type, RPRGlobalState *s)
 {
-  rpr_camera camera;
-  CHECK(rprContextCreateCamera(context, &camera))
-
-  if (strcmp(type, "perspective") == 0)
+  if (type == "perspective")
   {
-    return new Perspective(camera);
+    return new Perspective(s);
   }
-  if (strcmp(type, "orthographic") == 0)
+  if (type == "orthographic")
   {
-    return new Orthographic(camera);
+    return new Orthographic(s);
   }
-  throw std::runtime_error("could not create camera");
+  // an unknown camera must not break the application: a frame without valid camera can not be rendered
+  auto *camera = new Perspective(s);
+  camera->reportMessage(ANARI_SEVERITY_WARNING,
+      "unsupported camera subtype '%s', a perspective camera is used instead", std::string(type).c_str());
+  return camera;
 }
 
-void Camera::commit()
+void Camera::commitParameters()
 {
-  vec3 pos       = getParam<vec3>("position", vec3(0.f));
-  vec3 at        = getParam<vec3>("direction", vec3(0.f, 0.f, -1.f)) + pos;
-  vec3 up        = normalize(getParam<vec3>("up", vec3(0.f, 1.f, 0.f)));
-  mat4 transform = getParam<mat4x3>("transform", mat4x3(1));
-  CHECK(rprCameraLookAt(m_camera, pos[0], pos[1], pos[2], at[0], at[1], at[2], up[0], up[1], up[2]))
+  m_position  = getParam<float3>("position", float3(0.f));
+  m_direction = safeNormalize(getParam<float3>("direction", float3(0.f, 0.f, -1.f)), float3(0.f, 0.f, -1.f));
+  m_up        = safeNormalize(getParam<float3>("up", float3(0.f, 1.f, 0.f)), float3(0.f, 1.f, 0.f));
+  m_aspect    = getParam<float>("aspect", 1.f);
+  m_near      = getParam<float>("near", 0.f);
+  m_far       = getParam<float>("far", 0.f);
 
-  if (transform != mat4(1))
-  { // transform overrides camera pos, direction and up
-    CHECK(rprCameraSetTransform(m_camera, false, value_ptr(transform)))
+  mat4 transform(linalg::identity);
+  if (getParam("transform", ANARI_FLOAT32_MAT4, &transform))
+  { // transform is applied to camera pos, direction and up
+    m_position  = xfmPoint(transform, m_position);
+    m_direction = safeNormalize(xfmVec(transform, m_direction), m_direction);
+    m_up        = safeNormalize(xfmVec(transform, m_up), m_up);
+  }
+
+  if (!(m_aspect > 0.f))
+    m_aspect = 1.f;
+
+  box2 region(float2(0.f), float2(1.f));
+  if (getParam("imageRegion", ANARI_FLOAT32_BOX2, &region)
+      && (region.lower != float2(0.f) || region.upper != float2(1.f)))
+  {
+    reportMessage(ANARI_SEVERITY_WARNING, "camera parameter 'imageRegion' is not supported");
   }
 }
 
-void Camera::attachToScene(rpr_scene scene){CHECK(rprSceneSetCamera(scene, m_camera))}
+void Camera::finalize()
+{
+  if (!m_camera)
+  {
+    CHECK(rprContextCreateCamera(deviceState()->context, &m_camera))
+    if (!m_camera)
+      return;
+  }
+
+  // the up vector must not be parallel to the direction
+  float3 up = m_up;
+  if (linalg::length(linalg::cross(m_direction, up)) < 1e-6f)
+  {
+    float3 unused;
+    makeBasis(m_direction, up, unused);
+  }
+
+  const float3 at = m_position + m_direction;
+  CHECK(rprCameraLookAt(
+      m_camera, m_position.x, m_position.y, m_position.z, at.x, at.y, at.z, up.x, up.y, up.z))
+
+  if (m_near > 0.f)
+  {
+    CHECK(rprCameraSetNearPlane(m_camera, m_near))
+  }
+  if (m_far > 0.f)
+  {
+    CHECK(rprCameraSetFarPlane(m_camera, m_far))
+  }
+}
+
+bool Camera::isValid() const
+{
+  return m_camera != nullptr;
+}
+
+void Camera::attachToScene(rpr_scene scene)
+{
+  CHECK(rprSceneSetCamera(scene, m_camera))
+}
 
 Camera::~Camera()
 {
-  CHECK(rprObjectDelete(m_camera))
+  deviceState()->deleteLater(m_camera, DeleteOrder::SCENE_ITEM);
 }
 
 } // namespace rpr

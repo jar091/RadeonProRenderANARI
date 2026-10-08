@@ -19,11 +19,22 @@ namespace anari::rpr {
 
 struct StructuredRegularSpatialField : public SpatialField
 {
- public:
-  void commit() override;
+  explicit StructuredRegularSpatialField(RPRGlobalState *s);
+
+  void commitParameters() override;
+  void finalize() override;
+  bool isValid() const override;
+
+  uint3  size() const override;
+  float  value(size_t index) const override;
+  float3 origin() const override;
+  float3 spacing() const override;
 
  private:
-  void processValue(uvec3 position, Array3D *data);
+  helium::ChangeObserverPtr<Array3D> m_data;
+  float3                             m_position{0.f};
+  float3                             m_voxelSize{1.f};
+  bool                               m_valid{false};
 };
 
 } // namespace anari::rpr

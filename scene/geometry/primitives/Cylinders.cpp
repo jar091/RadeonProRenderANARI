@@ -15,50 +15,57 @@ limitations under the License.
 
 namespace anari::rpr {
 
-Cylinders::Cylinders(rpr_context context, rpr_material_system materialSystem) : Cones(context, materialSystem)
-{}
+Cylinders::Cylinders(RPRGlobalState *s) : Primitives(s), m_radius(this) {}
 
-void Cylinders::commit()
+void Cylinders::commitParameters()
 {
-  m_vertices     = getParamObject<Array1D>("vertex.position");
-  m_radius       = getParamObject<Array1D>("primitive.radius");
-  m_indices      = getParamObject<Array1D>("primitive.index");
-  m_caps         = getParamObject<Array1D>("vertex.cap");
-  m_globalRadius = getParam<float32>("radius", 1.f);
-  m_globalCaps   = processConeCaps(getParam<std::string>("caps", "none"));
-
-  if (!m_vertices)
-    throw std::runtime_error("missing 'vertex.position' on cylinder geometry");
-
-  clearAttributes();
-  resetBounds();
-  m_num_primitives = m_indices ? m_indices->size() : m_vertices->size() / 2;
-
-  for (int primitiveNumber = 0; primitiveNumber < m_num_primitives; primitiveNumber++)
-  {
-    uvec2   index        = m_indices ? m_indices->dataAs<uvec2>()[primitiveNumber]
-                                     : uvec2(primitiveNumber * 2, primitiveNumber * 2 + 1);
-    vec3    firstVertex  = m_vertices->dataAs<vec3>()[index.x];
-    vec3    secondVertex = m_vertices->dataAs<vec3>()[index.y];
-    float32 radius       = m_radius ? m_radius->dataAs<float32>()[primitiveNumber] : m_globalRadius;
-    extendBounds(calculateConeBounds(firstVertex, secondVertex, radius, radius));
-  }
-  processAttributeParameters(nullptr);
+  Primitives::commitParameters();
+  m_radius        = getArray1D(this, "primitive.radius");
+  m_global_radius = getParam<float>("radius", 1.f);
+  m_caps          = getParamString("caps", "none");
 }
 
-rpr_shape Cylinders::getPrimitive(int primitiveNumber, mat4 externalTransform)
+void Cylinders::finalize()
 {
-  uvec2     index        = m_indices ? m_indices->dataAs<uvec2>()[primitiveNumber]
-                                     : uvec2(primitiveNumber * 2, primitiveNumber * 2 + 1);
-  vec3      firstVertex  = m_vertices->dataAs<vec3>()[index.x];
-  vec3      secondVertex = m_vertices->dataAs<vec3>()[index.y];
-  float32   radius       = m_radius ? m_radius->dataAs<float32>()[primitiveNumber] : m_globalRadius;
-  uint8     firstCap     = m_caps ? m_caps->dataAs<uint8>()[index.x] : m_globalCaps.x;
-  uint8     secondCap    = m_caps ? m_caps->dataAs<uint8>()[index.y] : m_globalCaps.y;
-  rpr_shape cylinder     = createConeShape(
-          firstVertex, secondVertex, radius, radius, firstCap, secondCap, externalTransform, m_numSegments);
-  processConeAttributes(cylinder, index);
-  return cylinder;
+  clearMesh();
+
+  const size_t numVertices = checkVertices("cylinder");
+  if (numVertices == 0)
+    return;
+
+  const float3  *vertices      = m_vertices->beginAs<float3>();
+  const Array1D *indices       = checkArray(m_indices.get(), ANARI_UINT32_VEC2, 0, "primitive.index");
+  const size_t   numPrimitives = indices ? indices->size() : numVertices / 2;
+  const Array1D *radius = checkArray(m_radius.get(), ANARI_FLOAT32, numPrimitives, "primitive.radius");
+  if (numPrimitives == 0)
+    return;
+
+  const bool firstCap  = m_caps == "first" || m_caps == "both";
+  const bool secondCap = m_caps == "second" || m_caps == "both";
+
+  // the more cylinders the coarser their tessellation
+  int sides = 32;
+  while (sides > 4 && numPrimitives * size_t(sides) * 4 > MAX_TRIANGLES)
+    sides /= 2;
+
+  MeshData mesh;
+  prepareAttributes(mesh, numVertices, numPrimitives);
+  mesh.reserve(numPrimitives * size_t(sides) * 4 + 2, numPrimitives * size_t(sides) * 4);
+
+  for (size_t primitiveNumber = 0; primitiveNumber < numPrimitives; primitiveNumber++)
+  {
+    const uint2 index = indices ? indices->beginAs<uint2>()[primitiveNumber]
+                                : uint2(uint32_t(primitiveNumber * 2), uint32_t(primitiveNumber * 2 + 1));
+    if (index.x >= numVertices || index.y >= numVertices)
+      continue;
+    const float r = radius ? radius->beginAs<float>()[primitiveNumber] : m_global_radius;
+    if (!(r > 0.f))
+      continue;
+    mesh.addCone(vertices[index.x], r, vertices[index.y], r, firstCap, secondCap, sides,
+        attributeValues(index.x, primitiveNumber), attributeValues(index.y, primitiveNumber));
+  }
+
+  setMesh(mesh.view());
 }
 
 } // namespace anari::rpr

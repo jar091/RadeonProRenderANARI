@@ -13,31 +13,12 @@ limitations under the License.
 
 #pragma once
 
-#include "../../glm_extras.h"
-#include "../../rpr_common.h"
+#include "../../material/MaterialGraph.h"
 
 namespace anari::rpr {
 
-struct TransformNode
-{
- public:
-  TransformNode(rpr_material_system matsys, mat4 transform_matrix, rpr_material_node input);
-  ~TransformNode();
-
-  rpr_material_node getMaterial();
-
- private:
-  rpr_material_node m_dot0{};
-  rpr_material_node m_dot1{};
-  rpr_material_node m_dot2{};
-  rpr_material_node m_dot3{};
-  rpr_material_node m_transform{};
-  rpr_material_node m_r{};
-  rpr_material_node m_g{};
-  rpr_material_node m_b{};
-  rpr_material_node m_a{};
-  rpr_material_node m_rg{};
-  rpr_material_node m_rgb{};
-};
+// Adds the nodes which calculate 'transform * value + offset' to a material graph
+MaterialValue applyTransform(
+    MaterialGraph &graph, const mat4 &transform, const float4 &offset, const MaterialValue &value);
 
 } // namespace anari::rpr

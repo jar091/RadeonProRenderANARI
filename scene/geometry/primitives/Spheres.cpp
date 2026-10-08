@@ -12,138 +12,81 @@ limitations under the License.
 ********************************************************************/
 
 #include "Spheres.h"
-#include "Math/mathutils.h"
 
 namespace anari::rpr {
 
-Spheres::Spheres(rpr_context context, rpr_material_system materialSystem)
-    : Primitives(context, materialSystem)
+Spheres::Spheres(RPRGlobalState *s) : Primitives(s), m_radius(this) {}
+
+void Spheres::commitParameters()
 {
-  createBaseShape();
+  Primitives::commitParameters();
+  m_radius        = getArray1D(this, "vertex.radius");
+  m_global_radius = getParam<float>("radius", 1.f);
 }
 
-void Spheres::commit()
+void Spheres::finalize()
 {
-  m_vertices     = getParamObject<Array1D>("vertex.position");
-  m_radius       = getParamObject<Array1D>("vertex.radius");
-  m_indices      = getParamObject<Array1D>("primitive.index");
-  m_globalRadius = getParam<float>("radius", 1.f);
+  clearMesh();
 
-  if (!m_vertices)
-    throw std::runtime_error("missing 'vertex.position' on sphere geometry");
-  clearAttributes();
+  const size_t numVertices = checkVertices("sphere");
+  if (numVertices == 0)
+    return;
 
-  resetBounds();
+  const float3  *vertices = m_vertices->beginAs<float3>();
+  const Array1D *radius   = checkArray(m_radius.get(), ANARI_FLOAT32, numVertices, "vertex.radius");
+  const Array1D *indices  = checkArray(m_indices.get(), ANARI_UINT32, 0, "primitive.index");
 
-  m_num_primitives = m_indices ? m_indices->size() : m_vertices->size();
+  const size_t numPrimitives = indices ? indices->size() : numVertices;
+  if (numPrimitives == 0)
+    return;
 
-  for (int primitiveNumber = 0; primitiveNumber < m_num_primitives; primitiveNumber++)
+  // The base shape is a unit sphere, every sphere of the geometry is an instance of it. A few spheres
+  // are probably big ones, they get a finer tessellation.
+  MeshData unitSphere;
+  unitSphere.addSphere(float3(0.f), 1.f, numPrimitives <= 16 ? 4 : 3, AttributeValues());
+  setMesh(unitSphere.view());
+
+  // attributes per vertex or per primitive are attributes per instance
+  MeshData attributeSlots;
+  prepareAttributes(attributeSlots, numVertices, numPrimitives);
+
+  std::vector<mat4>                               transforms;
+  std::array<std::vector<float4>, NUM_ATTRIBUTES> attributes;
+  box3                                            bounds = emptyBox();
+  transforms.reserve(numPrimitives);
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
   {
-    uint32 index  = m_indices ? m_indices->dataAs<uint32>()[primitiveNumber] : primitiveNumber;
-    vec3   vertex = m_vertices->dataAs<vec3>()[index];
-    float  radius = m_radius ? m_radius->dataAs<float32>()[index] : m_globalRadius;
-
-    // bounds
-    m_bounds.upper.x = max(m_bounds.upper.x, vertex.x + radius);
-    m_bounds.upper.y = max(m_bounds.upper.y, vertex.y + radius);
-    m_bounds.upper.z = max(m_bounds.upper.z, vertex.z + radius);
-    m_bounds.lower.x = min(m_bounds.lower.x, vertex.x - radius);
-    m_bounds.lower.y = min(m_bounds.lower.y, vertex.y - radius);
-    m_bounds.lower.z = min(m_bounds.lower.z, vertex.z - radius);
+    if (attributeSlots.has_attribute[slot])
+      attributes[slot].reserve(numPrimitives);
   }
 
-  processAttributeParameters(m_indices);
-}
-
-rpr_shape Spheres::getPrimitive(int primitiveNumber, mat4 externalTransform)
-{
-  rpr_shape primitive;
-  uint32    index  = m_indices ? m_indices->dataAs<uint32>()[primitiveNumber] : primitiveNumber;
-  vec3      vertex = m_vertices->dataAs<vec3>()[index];
-  float     radius = m_radius ? m_radius->dataAs<float32>()[index] : m_globalRadius;
-
-  mat4 transform =
-      transpose(mat4(radius, 0, 0, vertex.x, 0, radius, 0, vertex.y, 0, 0, radius, vertex.z, 0, 0, 0, 1));
-  transform *= externalTransform;
-  CHECK(rprContextCreateInstance(m_context, m_base_shape, &primitive))
-  CHECK(rprShapeSetTransform(primitive, false, value_ptr(transform)))
-  return primitive;
-}
-
-void Spheres::createBaseShape()
-{ // creates base sphere with center 0,0,0 and radius 1
-  float const R    = 1.f / (float)(m_rings - 1);
-  float const S    = 1.f / (float)(m_sectors - 1);
-  auto const  m_pi = pi<float>();
-
-  std::vector<rpr_float> vertices;
-  std::vector<rpr_int>   indices;
-
-  int num_faces = (m_rings - 1) * (m_sectors - 1);
-
-  vertices.resize(m_rings * m_sectors * 3);
-  indices.resize(num_faces * 4);
-
-  auto v = vertices.begin();
-  auto i = indices.begin();
-
-  for (int r = 0; r < m_rings; r++)
-    for (int s = 0; s < m_sectors; s++)
-    {
-      float const y = sin((m_pi / 2.f) + m_pi * R * r);
-      float const x = cos(2 * m_pi * s * S) * sin(m_pi * r * R);
-      float const z = sin(2 * m_pi * s * S) * sin(m_pi * r * R);
-
-      *v++ = x;
-      *v++ = y;
-      *v++ = z;
-    }
-
-  for (int r = 0; r < m_rings - 1; r++)
-    for (int s = 0; s < m_sectors - 1; s++)
-    {
-      *i++ = r * m_sectors + s;
-      *i++ = r * m_sectors + (s + 1);
-      *i++ = (r + 1) * m_sectors + (s + 1);
-      *i++ = (r + 1) * m_sectors + s;
-    }
-
-  std::vector<rpr_int> faces(num_faces, 4);
-
-  // normal coordinates are same with vertex coordinates because center of sphere is (0,0,0)
-  CHECK(rprContextCreateMesh(m_context, (rpr_float *)vertices.data(), vertices.size() / 3,
-      sizeof(rpr_float) * 3, (rpr_float *)vertices.data(), vertices.size() / 3, sizeof(rpr_float) * 3,
-      nullptr, 0, 0, (rpr_int *)indices.data(), sizeof(rpr_int), (rpr_int *)indices.data(), sizeof(rpr_int),
-      nullptr, 0, faces.data(), num_faces, &m_base_shape))
-  CHECK(rprShapeSetVisibility(
-      m_base_shape, false)) // this is invisible 'original' sphere. It's instances will be visible
-}
-
-Attribute *Spheres::getAttribute(const char *name)
-{
-  Attribute *geometryAttribute = Geometry::getAttribute(name);
-  if (geometryAttribute)
-    return geometryAttribute;
-
-  if (std::strcmp(name, "color") == 0)
-    return createPerShapeAttribute(m_colors, name);
-  if (std::strcmp(name, "attribute0") == 0)
-    return createPerShapeAttribute(m_attribute0, name);
-  if (std::strcmp(name, "attribute1") == 0)
-    return createPerShapeAttribute(m_attribute1, name);
-  if (std::strcmp(name, "attribute2") == 0)
-    return createPerShapeAttribute(m_attribute2, name);
-  if (std::strcmp(name, "attribute3") == 0)
-    return createPerShapeAttribute(m_attribute3, name);
-
-  if (std::strcmp(name, "primitiveId") == 0)
+  for (size_t primitiveNumber = 0; primitiveNumber < numPrimitives; primitiveNumber++)
   {
-    Attribute *attribute = Attribute::fromType(m_matsys, RPR_MATERIAL_NODE_LOOKUP_OBJECT_ID);
-    m_attribute_map.emplace(name, attribute);
-    return attribute;
+    const size_t index = indices ? indices->beginAs<uint32_t>()[primitiveNumber] : primitiveNumber;
+    if (index >= numVertices)
+      continue;
+    const float r = radius ? radius->beginAs<float>()[index] : m_global_radius;
+    if (!(r > 0.f))
+      continue;
+    const float3 &center = vertices[index];
+    transforms.push_back(
+        mat4(float4(r, 0.f, 0.f, 0.f), float4(0.f, r, 0.f, 0.f), float4(0.f, 0.f, r, 0.f), float4(center, 1.f)));
+    bounds.extend(center - float3(r));
+    bounds.extend(center + float3(r));
+    const AttributeValues values = attributeValues(index, primitiveNumber);
+    for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
+    {
+      if (attributeSlots.has_attribute[slot])
+        attributes[slot].push_back(values[slot]);
+    }
   }
 
-  return nullptr;
+  if (transforms.empty())
+  {
+    clearMesh();
+    return;
+  }
+  setInstances(std::move(transforms), attributes, bounds);
 }
 
 } // namespace anari::rpr

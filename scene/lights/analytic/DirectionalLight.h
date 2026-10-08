@@ -19,15 +19,14 @@ namespace anari::rpr {
 
 struct DirectionalLight : public AnalyticLight
 {
- public:
-  explicit DirectionalLight(rpr_context context);
-  void commit() override;
-  void getInstances(std::vector<void *> &outInstances, mat4 transform) override;
+  explicit DirectionalLight(RPRGlobalState *s);
+  void commitParameters() override;
+  void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) override;
 
  private:
-  vec3    m_direction{};
-  float32 m_angularDiameter{};
-  float32 m_power{};
+  float3 m_direction{0.f, 0.f, -1.f};
+  float  m_angularDiameter{0.f};
+  float  m_irradiance{1.f}; // W/m^2 on a surface perpendicular to the direction
 };
 
 } // namespace anari::rpr

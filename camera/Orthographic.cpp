@@ -15,25 +15,36 @@ limitations under the License.
 
 namespace anari::rpr {
 
-Orthographic::Orthographic(rpr_camera camera) : Camera(camera)
+Orthographic::Orthographic(RPRGlobalState *s) : Camera(s) {}
+
+void Orthographic::commitParameters()
 {
-  CHECK(rprCameraSetMode(m_camera, RPR_CAMERA_MODE_ORTHOGRAPHIC))
+  Camera::commitParameters();
+
+  // 'height' is the parameter of ANARI 1.0, 'orthoHeight' was used by older versions of the device
+  m_height = getParam<float>("height", getParam<float>("orthoHeight", 1.f));
+  if (!(m_height > 0.f))
+    m_height = 1.f;
 }
 
-void Orthographic::commit()
+void Orthographic::finalize()
 {
-  Camera::commit();
+  Camera::finalize();
+  if (!m_camera)
+    return;
 
-  auto sensorHeight = getParam<float>("sensorHeight", 24.f); // additional parameter
-  auto orthoHeight  = getParam<float>("orthoHeight", 1.f); // additional parameter
-  auto aspect       = getParam<float>("aspect", 1.f);
+  CHECK(rprCameraSetMode(m_camera, RPR_CAMERA_MODE_ORTHOGRAPHIC))
 
-  float sensorWidth = sensorHeight * aspect;
-  CHECK(rprCameraSetSensorSize(m_camera, sensorWidth, sensorHeight))
+  const float sensorHeight = 24.f;
+  CHECK(rprCameraSetSensorSize(m_camera, sensorHeight * m_aspect, sensorHeight))
 
-  float orthoWidth = orthoHeight * aspect;
-  CHECK(rprCameraSetOrthoHeight(m_camera, orthoHeight))
-  CHECK(rprCameraSetOrthoWidth(m_camera, orthoWidth))
+  CHECK(rprCameraSetOrthoHeight(m_camera, m_height))
+  CHECK(rprCameraSetOrthoWidth(m_camera, m_height * m_aspect))
+}
+
+float Orthographic::depth(const float3 &point) const
+{
+  return linalg::dot(point - m_position, m_direction);
 }
 
 } // namespace anari::rpr

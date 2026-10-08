@@ -15,49 +15,51 @@ limitations under the License.
 
 namespace anari::rpr {
 
-PointLight::PointLight(rpr_context context) : AnalyticLight(context) {}
+// The 'radiant power' of a RPR point light is its radiant intensity in W/sr. The one of a RPR sphere light
+// is the radiance of its surface in W/sr/m^2 (both were measured with a diffuse plane).
 
-void PointLight::commit()
+PointLight::PointLight(RPRGlobalState *s) : AnalyticLight(s) {}
+
+void PointLight::commitParameters()
 {
-  Light::commit();
-  m_position     = getParam<vec3>("position", vec3(0));
-  m_radius       = getParam<float32>("radius", 0.f);
-  auto intensity = getParam<float32>("intensity", 1.f);
-  auto power     = getParam<float32>("power", 1.f);
-  auto radiance  = getParam<float32>("radiance", 1.f);
+  Light::commitParameters();
+  m_position = getParam<float3>("position", float3(0.f));
+  m_radius   = std::max(getParam<float>("radius", 0.f), 0.f);
 
-  if (hasParam("intensity") || !(hasParam("power") || !hasParam("radiance")))
+  if (hasParam("intensity") || (!hasParam("power") && !hasParam("radiance")))
   {
-    m_power = intensity * pi<float32>() * 4.f;
-  } else if (hasParam("power") || !hasParam("radiance"))
+    m_intensity = getParam<float>("intensity", 1.f);
+  } else if (hasParam("power"))
   {
-    m_power = power;
+    m_intensity = getParam<float>("power", 1.f) / (4.f * pi);
   } else
   {
-    float32 area = 4 * pi<float32>() * m_radius * m_radius;
-    m_power      = radiance * area * pi<float32>() * 4.f;
+    // radiance of the surface of the sphere
+    m_intensity = getParam<float>("radiance", 1.f) * pi * m_radius * m_radius;
   }
 }
 
-void PointLight::getInstances(std::vector<void *> &outInstances, mat4 transform)
+void PointLight::attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items)
 {
-  rpr_light light;
+  rpr_light light = nullptr;
   if (m_radius == 0.f)
   {
-    CHECK(rprContextCreatePointLight(m_context, &light))
-    CHECK(
-        rprPointLightSetRadiantPower3f(light, m_color.r * m_power, m_color.g * m_power, m_color.b * m_power))
-
+    const float3 power = m_color * m_intensity;
+    CHECK(rprContextCreatePointLight(deviceState()->context, &light))
+    if (!light)
+      return;
+    CHECK(rprPointLightSetRadiantPower3f(light, power.x, power.y, power.z))
   } else
   {
-    CHECK(rprContextCreateSphereLight(m_context, &light))
-    CHECK(
-        rprSphereLightSetRadiantPower3f(light, m_color.r * m_power, m_color.g * m_power, m_color.b * m_power))
+    // a sphere with the radiance L has the intensity L * pi * r^2
+    const float3 power = m_color * m_intensity / (pi * m_radius * m_radius);
+    CHECK(rprContextCreateSphereLight(deviceState()->context, &light))
+    if (!light)
+      return;
+    CHECK(rprSphereLightSetRadiantPower3f(light, power.x, power.y, power.z))
     CHECK(rprSphereLightSetRadius(light, m_radius))
   }
-  mat4 transformResult = translate(mat4(1), m_position) * transform;
-  CHECK(rprLightSetTransform(light, false, value_ptr(transformResult)))
-  outInstances.push_back(light);
+  attachLight(scene, light, linalg::mul(transform, linalg::translation_matrix(m_position)), items);
 }
 
 } // namespace anari::rpr

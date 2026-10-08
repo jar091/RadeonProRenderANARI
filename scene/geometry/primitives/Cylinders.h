@@ -13,20 +13,20 @@ limitations under the License.
 
 #pragma once
 
-#include "Cones.h"
+#include "Primitives.h"
 
 namespace anari::rpr {
 
-struct Cylinders : public Cones
+struct Cylinders : public Primitives
 {
- public:
-  Cylinders(rpr_context context, rpr_material_system materialSystem);
-  void commit() override;
+  explicit Cylinders(RPRGlobalState *s);
+  void commitParameters() override;
+  void finalize() override;
 
  private:
-  rpr_shape getPrimitive(int primitive_number, mat4 externalTransform) override;
-
-  float32 m_globalRadius{};
+  helium::ChangeObserverPtr<Array1D> m_radius;
+  float                              m_global_radius{1.f};
+  std::string                        m_caps;
 };
 
 } // namespace anari::rpr

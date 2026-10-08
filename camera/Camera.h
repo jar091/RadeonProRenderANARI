@@ -22,15 +22,29 @@ namespace rpr {
 struct Camera : public Object
 {
  public:
-  explicit Camera(rpr_camera &camera);
+  explicit Camera(RPRGlobalState *s);
   ~Camera() override;
 
-  void           commit() override;
-  static Camera *createInstance(rpr_context &context, const char *type);
-  void           attachToScene(rpr_scene scene);
+  static Camera *createInstance(std::string_view type, RPRGlobalState *s);
+
+  void commitParameters() override;
+  void finalize() override;
+  bool isValid() const override;
+
+  void attachToScene(rpr_scene scene);
+
+  // value of the depth channel of a frame for a point of the scene
+  virtual float depth(const float3 &point) const = 0;
 
  protected:
-  rpr_camera m_camera;
+  rpr_camera m_camera{};
+
+  float3 m_position{0.f};
+  float3 m_direction{0.f, 0.f, -1.f};
+  float3 m_up{0.f, 1.f, 0.f};
+  float  m_aspect{1.f};
+  float  m_near{0.f};
+  float  m_far{0.f};
 };
 
 } // namespace rpr

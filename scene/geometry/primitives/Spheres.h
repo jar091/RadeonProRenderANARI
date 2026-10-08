@@ -19,21 +19,13 @@ namespace anari::rpr {
 
 struct Spheres : public Primitives
 {
-  Spheres(rpr_context context, rpr_material_system materialSystem);
-  void       commit() override;
-  Attribute *getAttribute(const char *name) override;
+  explicit Spheres(RPRGlobalState *s);
+  void commitParameters() override;
+  void finalize() override;
 
  private:
-  void      createBaseShape();
-  rpr_shape getPrimitive(int primitive_number, mat4 externalTransform) override;
-
-  int m_sectors = 32;
-  int m_rings   = 32;
-
-  Array1D *m_vertices{};
-  Array1D *m_radius{};
-  Array1D *m_indices{};
-  float32  m_globalRadius{};
+  helium::ChangeObserverPtr<Array1D> m_radius;
+  float                              m_global_radius{1.f};
 };
 
 } // namespace anari::rpr

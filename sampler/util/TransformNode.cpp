@@ -15,86 +15,33 @@ limitations under the License.
 
 namespace anari::rpr {
 
-TransformNode::TransformNode(rpr_material_system matsys, mat4 transform_matrix, rpr_material_node input)
+MaterialValue applyTransform(
+    MaterialGraph &graph, const mat4 &transform, const float4 &offset, const MaterialValue &value)
 {
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_dot0))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_dot1))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_dot2))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_dot3))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_transform))
+  MaterialValue result = value;
 
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_r))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_g))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_b))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_a))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_rg))
-  CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_ARITHMETIC, &m_rgb))
+  if (!value.isNode())
+  {
+    result = MaterialValue(linalg::mul(transform, value.constant));
+  } else if (!isIdentity(transform))
+  {
+    // Every component of the result is the dot product of the value and a row of the matrix. The dot
+    // product is in all components of the output of the node, the mask selects the one of the row.
+    for (int row = 0; row < 4; row++)
+    {
+      const float4 matrixRow(transform[0][row], transform[1][row], transform[2][row], transform[3][row]);
+      float4       mask(0.f);
+      mask[row] = 1.f;
+      const MaterialValue component = graph.mul(
+          graph.arithmetic(RPR_MATERIAL_NODE_OP_DOT4, value, MaterialValue(matrixRow)), MaterialValue(mask));
+      result = row == 0 ? component : graph.add(result, component);
+    }
+  }
 
-  CHECK(rprMaterialNodeSetInputNByKey(m_dot0, RPR_MATERIAL_INPUT_COLOR0, input))
-  CHECK(rprMaterialNodeSetInputNByKey(m_dot1, RPR_MATERIAL_INPUT_COLOR0, input))
-  CHECK(rprMaterialNodeSetInputNByKey(m_dot2, RPR_MATERIAL_INPUT_COLOR0, input))
-  CHECK(rprMaterialNodeSetInputNByKey(m_dot3, RPR_MATERIAL_INPUT_COLOR0, input))
+  if (offset != float4(0.f))
+    result = graph.add(result, MaterialValue(offset));
 
-  CHECK(rprMaterialNodeSetInputFByKey(m_dot0, RPR_MATERIAL_INPUT_COLOR1, transform_matrix[0][0],
-      transform_matrix[1][0], transform_matrix[2][0], transform_matrix[3][0]))
-  CHECK(rprMaterialNodeSetInputFByKey(m_dot1, RPR_MATERIAL_INPUT_COLOR1, transform_matrix[0][1],
-      transform_matrix[1][1], transform_matrix[2][1], transform_matrix[3][1]))
-  CHECK(rprMaterialNodeSetInputFByKey(m_dot2, RPR_MATERIAL_INPUT_COLOR1, transform_matrix[0][2],
-      transform_matrix[1][2], transform_matrix[2][2], transform_matrix[3][2]))
-  CHECK(rprMaterialNodeSetInputFByKey(m_dot3, RPR_MATERIAL_INPUT_COLOR1, transform_matrix[0][3],
-      transform_matrix[1][3], transform_matrix[2][3], transform_matrix[3][3]))
-
-  CHECK(rprMaterialNodeSetInputUByKey(m_dot0, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_DOT4))
-  CHECK(rprMaterialNodeSetInputUByKey(m_dot1, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_DOT4))
-  CHECK(rprMaterialNodeSetInputUByKey(m_dot2, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_DOT4))
-  CHECK(rprMaterialNodeSetInputUByKey(m_dot3, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_DOT4))
-
-  CHECK(rprMaterialNodeSetInputNByKey(m_r, RPR_MATERIAL_INPUT_COLOR0, m_dot0))
-  CHECK(rprMaterialNodeSetInputNByKey(m_g, RPR_MATERIAL_INPUT_COLOR0, m_dot1))
-  CHECK(rprMaterialNodeSetInputNByKey(m_b, RPR_MATERIAL_INPUT_COLOR0, m_dot2))
-  CHECK(rprMaterialNodeSetInputNByKey(m_a, RPR_MATERIAL_INPUT_COLOR0, m_dot3))
-
-  CHECK(rprMaterialNodeSetInputFByKey(m_r, RPR_MATERIAL_INPUT_COLOR1, 1, 0, 0, 0))
-  CHECK(rprMaterialNodeSetInputFByKey(m_g, RPR_MATERIAL_INPUT_COLOR1, 0, 1, 0, 0))
-  CHECK(rprMaterialNodeSetInputFByKey(m_b, RPR_MATERIAL_INPUT_COLOR1, 0, 0, 1, 0))
-  CHECK(rprMaterialNodeSetInputFByKey(m_a, RPR_MATERIAL_INPUT_COLOR1, 0, 0, 0, 1))
-
-  CHECK(rprMaterialNodeSetInputUByKey(m_r, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_MUL))
-  CHECK(rprMaterialNodeSetInputUByKey(m_g, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_MUL))
-  CHECK(rprMaterialNodeSetInputUByKey(m_b, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_MUL))
-  CHECK(rprMaterialNodeSetInputUByKey(m_a, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_MUL))
-
-  CHECK(rprMaterialNodeSetInputNByKey(m_rg, RPR_MATERIAL_INPUT_COLOR0, m_r))
-  CHECK(rprMaterialNodeSetInputNByKey(m_rg, RPR_MATERIAL_INPUT_COLOR1, m_g))
-  CHECK(rprMaterialNodeSetInputUByKey(m_rg, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_ADD))
-
-  CHECK(rprMaterialNodeSetInputNByKey(m_rgb, RPR_MATERIAL_INPUT_COLOR0, m_rg))
-  CHECK(rprMaterialNodeSetInputNByKey(m_rgb, RPR_MATERIAL_INPUT_COLOR1, m_b))
-  CHECK(rprMaterialNodeSetInputUByKey(m_rgb, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_ADD))
-
-  CHECK(rprMaterialNodeSetInputNByKey(m_transform, RPR_MATERIAL_INPUT_COLOR0, m_rgb))
-  CHECK(rprMaterialNodeSetInputNByKey(m_transform, RPR_MATERIAL_INPUT_COLOR1, m_a))
-  CHECK(rprMaterialNodeSetInputUByKey(m_transform, RPR_MATERIAL_INPUT_OP, RPR_MATERIAL_NODE_OP_ADD))
-}
-
-rpr_material_node TransformNode::getMaterial()
-{
-  return m_transform;
-}
-
-TransformNode::~TransformNode()
-{
-  CHECK(rprObjectDelete(m_dot0))
-  CHECK(rprObjectDelete(m_dot1))
-  CHECK(rprObjectDelete(m_dot2))
-  CHECK(rprObjectDelete(m_dot3))
-  CHECK(rprObjectDelete(m_transform))
-  CHECK(rprObjectDelete(m_r))
-  CHECK(rprObjectDelete(m_g))
-  CHECK(rprObjectDelete(m_b))
-  CHECK(rprObjectDelete(m_a))
-  CHECK(rprObjectDelete(m_rg))
-  CHECK(rprObjectDelete(m_rgb))
+  return result;
 }
 
 } // namespace anari::rpr

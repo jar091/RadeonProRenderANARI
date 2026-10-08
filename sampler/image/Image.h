@@ -12,34 +12,44 @@ limitations under the License.
 ********************************************************************/
 
 #pragma once
-#include <map>
 #include "../Sampler.h"
 
 namespace anari::rpr {
 
+// Creates a RPR image with four components from 'width' x 'height' elements of an ANARI array.
+// The first row of the RPR image is the last row of the ANARI array if 'flipRows' is set.
+rpr_image createImageFromData(const RPRGlobalState *state, const void *data, ANARIDataType elementType,
+    size_t width, size_t height, bool flipRows);
+
 struct Image : public Sampler
 {
  public:
-  Image(rpr_context context, rpr_material_system matsys);
-  void commit() override;
+  explicit Image(RPRGlobalState *s);
   ~Image() override;
-  rpr_material_node generateMaterial(Geometry *geometry) override;
+
+  void commitParameters() override;
+  bool isValid() const override;
+
+  MaterialValue generateMaterial(MaterialGraph &graph) const override;
 
  protected:
-  static rpr_image_filter_type processFilter(const std::string &name);
-  static rpr_image_wrap_type   processWrap(const std::string &name);
+  static rpr_image_wrap_type processWrap(const std::string &name);
 
-  rpr_material_node applyTransformNode(mat4 transform, rpr_material_node input);
-  void              clearInstances();
+  // replaces the RPR image by a new one which is created from the data of an array
+  void setImage(const void *data, ANARIDataType elementType, size_t width, size_t height);
+  void clearImage();
 
-  std::string           m_input_attribute;
-  mat4                  m_input_transform{};
-  mat4                  m_output_transform{};
+  // adds the node which samples the RPR image at texture coordinates
+  MaterialValue generateImageTexture(MaterialGraph &graph, const MaterialValue &uv,
+      rpr_image_wrap_type wrapU, rpr_image_wrap_type wrapV) const;
+
+  mat4                  m_input_transform{linalg::identity};
+  float4                m_input_offset{0.f};
   rpr_image             m_image{};
-  rpr_image_filter_type m_filter{};
-
-  std::vector<TransformNode *>   m_transform_nodes;
-  std::vector<rpr_material_node> m_instances;
+  float2                m_image_size{1.f, 1.f};
+  rpr_image_filter_type m_filter{RPR_IMAGE_FILTER_TYPE_LINEAR};
+  rpr_image_wrap_type   m_wrap_mode_u{RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE};
+  rpr_image_wrap_type   m_wrap_mode_v{RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE};
 };
 
 } // namespace anari::rpr

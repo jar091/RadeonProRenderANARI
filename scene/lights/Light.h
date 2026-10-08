@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "../../rpr_common.h"
 #include "../SceneObject.h"
+#include "../geometry/Surface.h"
 
 namespace anari {
 namespace rpr {
@@ -22,24 +23,23 @@ namespace rpr {
 struct Light : public SceneObject
 {
  public:
-  explicit Light(rpr_context &context);
-  ~Light() override;
+  explicit Light(RPRGlobalState *s);
+  static Light *createInstance(std::string_view type, RPRGlobalState *s);
 
-  static Light       *createInstance(rpr_context &context, rpr_material_system matsys, const char *type);
-  void                commit() override;
-  virtual inline void attachToScene(rpr_scene scene, mat4 transform){};
-  void                attachToScene(rpr_scene scene);
-  virtual inline void getInstances(std::vector<void *> &outInstances, mat4 transform){};
+  void commitParameters() override;
+
+  // creates the RPR objects of the light for an instance and attaches them to the scene
+  virtual void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) = 0;
+
+  // The environment of a RPR scene is a single light which also contains the ambient light of the
+  // renderer, it is managed by the world.
+  virtual bool isEnvironmentLight() const;
+
+  bool visible() const;
 
  protected:
-  rpr_context         m_context;
-  std::vector<void *> m_instances; // this could be rpr_light or rpr_shape
-
-  vec3 m_color{};
-  bool m_visible{};
-
- private:
-  void clear();
+  float3 m_color{1.f};
+  bool   m_visible{true};
 };
 
 } // namespace rpr

@@ -17,27 +17,45 @@ limitations under the License.
 #include "../../rpr_common.h"
 #include "../SceneObject.h"
 #include "Geometry.h"
+// std
+#include <memory>
+#include <set>
+#include <vector>
 
 namespace anari {
 namespace rpr {
 
+// RPR objects which are part of a scene. They are created when the scene of a world is updated.
+struct SceneItems
+{
+  std::vector<rpr_shape> shapes;
+  std::vector<rpr_light> lights;
+  // Base shapes of the geometries. They are owned by the geometries, but they have to be part of the
+  // scene as long as their instances are.
+  std::set<rpr_shape> base_shapes;
+  // material nodes which are used by the shapes of this scene only
+  std::vector<std::unique_ptr<MaterialGraph>> graphs;
+};
+
 struct Surface : public SceneObject
 {
-  explicit Surface(rpr_material_system materialSystem);
-  ~Surface() override;
+  explicit Surface(RPRGlobalState *s);
 
-  void commit() override;
-  void attachToScene(rpr_scene scene, mat4 transform = mat4(1));
-  void getInstances(std::vector<rpr_shape> &out_shapes, mat4 transform);
+  void commitParameters() override;
+  void finalize() override;
+  bool isValid() const override;
+  box3 bounds() const override;
+
+  // creates an instance of the geometry with the material of the surface and attaches it to the scene
+  void attachToScene(
+      rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes, SceneItems &items);
 
  private:
-  IntrusivePtr<Geometry> m_geometry;
-  std::vector<rpr_shape> m_instances;
-
-  rpr_material_system m_matsys;
-  rpr_material_node   m_material_instance{};
-
-  void clearInstances();
+  helium::IntrusivePtr<Geometry> m_geometry;
+  helium::IntrusivePtr<Material> m_material;
+  // used if the surface has no valid material
+  helium::IntrusivePtr<Material> m_default_material;
+  bool                           m_visible{true};
 };
 
 } // namespace rpr

@@ -15,40 +15,30 @@ limitations under the License.
 
 namespace anari::rpr {
 
-PathTracerRenderer::PathTracerRenderer(rpr_context context) : Renderer(context){}
+PathTracerRenderer::PathTracerRenderer(RPRGlobalState *s) : Renderer(s) {}
 
-void PathTracerRenderer::commit()
+void PathTracerRenderer::commitParameters()
 {
-  float bgColor[4]   = {0, 0, 0, 0};
-  auto  bgColorData3 = getParam<vec3>("backgroundColor", vec3(-1));
-  auto  bgColorData4 = getParam<vec4>("backgroundColor", vec4(-1));
+  Renderer::commitParameters();
+  m_max_ray_depth  = std::clamp(getParam<int>("maxRayDepth", 8), 1, 50);
+  m_radiance_clamp = getParam<float>("radianceClamp", 0.f);
+}
 
-  if (bgColorData3.r >= 0 && bgColorData3.g >= 0 && bgColorData3.b >= 0)
-  { // detection of missed parameter and protection from negative values
-    bgColor[0] = bgColorData3.r;
-    bgColor[1] = bgColorData3.g;
-    bgColor[2] = bgColorData3.b;
-    bgColor[3] = 1.f;
-  }
+void PathTracerRenderer::attachToContext() const
+{
+  Renderer::attachToContext();
 
-  else if (bgColorData4.r >= 0 && bgColorData4.g >= 0 && bgColorData4.b >= 0 && bgColorData4.a >= 0)
-  {
-    bgColor[0] = bgColorData4.r;
-    bgColor[1] = bgColorData4.g;
-    bgColor[2] = bgColorData4.b;
-    bgColor[3] = bgColorData4.a;
-  }
-
-  m_pixel_samples = getParam<int>("pixelSamples", 1);
-
-  if (m_background_image != nullptr)
-  {
-    CHECK(rprObjectDelete(m_background_image))
-    m_background_image = nullptr;
-  }
-  rpr_image_format format = {4, RPR_COMPONENT_TYPE_FLOAT32};
-  rpr_image_desc   desc   = {1, 1, 0, 3 * sizeof(rpr_float), 0};
-  CHECK(rprContextCreateImage(m_context, format, &desc, bgColor, &m_background_image))
+  rpr_context context = deviceState()->context;
+  // the same limit for all kinds of bounces
+  const rpr_uint depth = rpr_uint(m_max_ray_depth);
+  CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_RECURSION, depth))
+  CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_DEPTH_DIFFUSE, depth))
+  CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_DEPTH_GLOSSY, depth))
+  CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_DEPTH_REFRACTION, depth))
+  CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_DEPTH_GLOSSY_REFRACTION, depth))
+  CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_DEPTH_SHADOW, depth))
+  CHECK(rprContextSetParameterByKey1f(context, RPR_CONTEXT_RADIANCE_CLAMP,
+      m_radiance_clamp > 0.f ? m_radiance_clamp : std::numeric_limits<float>::max()))
 }
 
 } // namespace anari::rpr

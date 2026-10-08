@@ -15,88 +15,88 @@ limitations under the License.
 
 namespace anari::rpr {
 
-QuadLight::QuadLight(rpr_context &context, rpr_material_system &matsys) : Light(context)
+QuadLight::QuadLight(RPRGlobalState *s) : Light(s) {}
+
+void QuadLight::commitParameters()
 {
-  m_matsys = matsys;
-}
+  Light::commitParameters();
+  m_position = getParam<float3>("position", float3(0.f));
+  m_edge1    = getParam<float3>("edge1", float3(1.f, 0.f, 0.f));
+  m_edge2    = getParam<float3>("edge2", float3(0.f, 1.f, 0.f));
+  m_side     = getParamString("side", "front");
 
-void QuadLight::commit()
-{
-  Light::commit();
-  clear();
-
-  auto position  = getParam<vec3>("position", vec3(0));
-  auto edge1     = getParam<vec3>("edge1", vec3(1, 0, 0));
-  auto edge2     = getParam<vec3>("edge2", vec3(0, 1, 0));
-  auto intensity = getParam<float32>("intensity", 1.f);
-  auto power     = getParam<float32>("power", 1.f);
-  auto radiance  = getParam<float32>("radiance", 1.f);
-  auto side      = getParam<std::string>("side", "front");
-
-  float32 resultPower;
-  float32 area = length(cross(edge1, edge2));
-  if (hasParam("intensity") || !(hasParam("power") || !hasParam("radiance")))
+  const float area  = linalg::length(linalg::cross(m_edge1, m_edge2));
+  const float sides = m_side == "both" ? 2.f : 1.f;
+  if (hasParam("radiance") || (!hasParam("intensity") && !hasParam("power")))
   {
-    resultPower = intensity / area;
-  } else if (hasParam("power") || !hasParam("radiance"))
+    m_radiance = getParam<float>("radiance", 1.f);
+  } else if (hasParam("intensity"))
   {
-    resultPower = power / area;
+    // intensity in the direction of the normal
+    m_radiance = area > 0.f ? getParam<float>("intensity", 1.f) / area : 0.f;
   } else
   {
-    resultPower = radiance;
+    // a diffuse emitter with the radiance L emits the power L * pi * area on every side
+    m_radiance = area > 0.f ? getParam<float>("power", 1.f) / (pi * area * sides) : 0.f;
   }
-
-  m_vertex.clear();
-  m_vertex.push_back(position);
-  m_vertex.push_back(position + edge1);
-  m_vertex.push_back(position + edge2);
-  m_vertex.push_back(position + edge1 + edge2);
-
-  vec3 normal = normalize(cross(edge1, edge2));
-  if (strcmp(side.c_str(), "back") == 0)
-  {
-    normal *= -1;
-  }
-  rpr_uint mode = strcmp(side.c_str(), "both") == 0 ? RPR_UBER_MATERIAL_EMISSION_MODE_DOUBLESIDED
-                                                    : RPR_UBER_MATERIAL_EMISSION_MODE_SINGLESIDED;
-
-  m_normal.clear();
-  m_normal.push_back(m_vertex[0] + normal);
-  m_normal.push_back(m_vertex[1] + normal);
-  m_normal.push_back(m_vertex[2] + normal);
-  m_normal.push_back(m_vertex[3] + normal);
-
-  CHECK(rprMaterialSystemCreateNode(m_matsys, RPR_MATERIAL_NODE_UBERV2, &m_material))
-  CHECK(rprMaterialNodeSetInputFByKey(m_material, RPR_MATERIAL_INPUT_UBER_EMISSION_COLOR,
-      m_color.r * resultPower, m_color.g * resultPower, m_color.b * resultPower, 1.f))
-  CHECK(
-      rprMaterialNodeSetInputFByKey(m_material, RPR_MATERIAL_INPUT_UBER_EMISSION_WEIGHT, 1.f, 1.f, 1.f, 1.f))
-  CHECK(rprMaterialNodeSetInputUByKey(m_material, RPR_MATERIAL_INPUT_UBER_EMISSION_MODE, mode))
 }
 
-void QuadLight::attachToScene(rpr_scene scene, mat4 transform)
+void QuadLight::finalize()
 {
-  rpr_shape instance;
+  clear();
+
+  auto *state = deviceState();
+  CHECK(rprMaterialSystemCreateNode(state->matsys, RPR_MATERIAL_NODE_UBERV2, &m_material))
+  if (!m_material)
+    return;
+
+  const float3   emission = m_color * m_radiance;
+  const rpr_uint mode     = m_side == "both" ? RPR_UBER_MATERIAL_EMISSION_MODE_DOUBLESIDED
+                                             : RPR_UBER_MATERIAL_EMISSION_MODE_SINGLESIDED;
+  CHECK(rprMaterialNodeSetInputFByKey(
+      m_material, RPR_MATERIAL_INPUT_UBER_EMISSION_COLOR, emission.x, emission.y, emission.z, 1.f))
+  CHECK(rprMaterialNodeSetInputFByKey(m_material, RPR_MATERIAL_INPUT_UBER_EMISSION_WEIGHT, 1.f, 1.f, 1.f, 1.f))
+  CHECK(rprMaterialNodeSetInputUByKey(m_material, RPR_MATERIAL_INPUT_UBER_EMISSION_MODE, mode))
+  // the light does not reflect anything
+  CHECK(rprMaterialNodeSetInputFByKey(m_material, RPR_MATERIAL_INPUT_UBER_DIFFUSE_COLOR, 0.f, 0.f, 0.f, 1.f))
+  CHECK(rprMaterialNodeSetInputFByKey(m_material, RPR_MATERIAL_INPUT_UBER_DIFFUSE_WEIGHT, 0.f, 0.f, 0.f, 0.f))
+  CHECK(rprMaterialNodeSetInputFByKey(m_material, RPR_MATERIAL_INPUT_UBER_REFLECTION_WEIGHT, 0.f, 0.f, 0.f, 0.f))
+}
+
+void QuadLight::attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items)
+{
+  if (!m_material)
+    return;
+
+  // The front side of the light is the one with the normal cross(edge1, edge2), single sided emissive
+  // materials emit on the front side of the faces.
+  const bool    back        = m_side == "back";
+  const float3  vertices[4] = {m_position, m_position + m_edge1, m_position + m_edge1 + m_edge2, m_position + m_edge2};
+  const rpr_int front[4]    = {0, 1, 2, 3};
+  const rpr_int reversed[4] = {3, 2, 1, 0};
+  const rpr_int faces[1]    = {4};
+
   // create new mesh per instance because emissive material assigned to rpr instance produces core crash
-  CHECK(rprContextCreateMesh(m_context, (rpr_float *)m_vertex.data(), 4, sizeof(rpr_float) * 3,
-      (rpr_float *)m_normal.data(), 4, sizeof(rpr_float) * 3, nullptr, 0, 0, m_index, sizeof(rpr_int),
-      m_index, sizeof(rpr_int), nullptr, 0, m_faces, 1, &instance))
-  CHECK(rprShapeSetTransform(instance, false, value_ptr(transform)))
-  CHECK(rprShapeSetMaterial(instance, m_material))
-  CHECK(rprShapeSetVisibilityFlag(instance, RPR_SHAPE_VISIBILITY_PRIMARY_ONLY_FLAG, m_visible))
-  CHECK(rprShapeSetVisibilityFlag(instance, RPR_SHAPE_VISIBILITY_SHADOW, m_visible))
-  CHECK(rprShapeSetVisibilityFlag(instance, RPR_SHAPE_VISIBILITY_LIGHT, m_visible))
-  m_instances.push_back(instance);
-  CHECK(rprSceneAttachShape(scene, instance))
+  rpr_shape shape = nullptr;
+  CHECK(rprContextCreateMesh(deviceState()->context, (const rpr_float *)vertices, 4, sizeof(float3), nullptr, 0,
+      0, nullptr, 0, 0, back ? reversed : front, sizeof(rpr_int), nullptr, 0, nullptr, 0, faces, 1, &shape))
+  if (!shape)
+    return;
+  CHECK(rprShapeSetTransform(shape, false, &transform[0][0]))
+  CHECK(rprShapeSetMaterial(shape, m_material))
+  if (!m_visible)
+  {
+    // the light still illuminates the scene, but it is not seen by the camera
+    CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_PRIMARY_ONLY_FLAG, false))
+  }
+  CHECK(rprSceneAttachShape(scene, shape))
+  items.shapes.push_back(shape);
 }
 
 void QuadLight::clear()
 {
-  if (m_material)
-  {
-    CHECK(rprObjectDelete(m_material))
-    m_material = nullptr;
-  }
+  deviceState()->deleteLater(m_material, DeleteOrder::MATERIAL);
+  m_material = nullptr;
 }
 
 QuadLight::~QuadLight()

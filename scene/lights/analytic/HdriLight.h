@@ -17,21 +17,33 @@ limitations under the License.
 
 namespace anari::rpr {
 
+// Environment light with an image in equirectangular projection. The RPR environment light is created
+// by the world, because it also contains the ambient light of the renderer.
 struct HdriLight : public AnalyticLight
 {
- public:
-  explicit HdriLight(rpr_context context);
-  ~HdriLight() override;
-  void commit() override;
-  void getInstances(std::vector<void *> &outInstances, mat4 transform) override;
+  explicit HdriLight(RPRGlobalState *s);
+
+  void commitParameters() override;
+  void finalize() override;
+  bool isValid() const override;
+
+  void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) override;
+  bool isEnvironmentLight() const override;
+
+  // size of the environment image
+  size_t width() const;
+  size_t height() const;
+  // radiance of a pixel of the image: 'radiance' * 'color' * 'scale'
+  float3 radiance(size_t x, size_t y) const;
+
+  // rotation of the light: maps the local axes of the image to world space
+  mat4 orientation() const;
 
  private:
-  vec3      m_up{};
-  vec3      m_direction{};
-  rpr_image m_image{};
-  float32   m_scale{};
-
-  void clear();
+  helium::ChangeObserverPtr<Array2D> m_radiance;
+  float3                             m_direction{1.f, 0.f, 0.f};
+  float3                             m_up{0.f, 0.f, 1.f};
+  float                              m_scale{1.f};
 };
 
 } // namespace anari::rpr

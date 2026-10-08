@@ -15,25 +15,51 @@ limitations under the License.
 
 #include "../rpr_common.h"
 #include "SceneObject.h"
+#include "geometry/Surface.h"
 
 namespace anari {
 namespace rpr {
 
-struct Surface;
-struct Light;
-struct Volume;
+struct HdriLight;
+
+// instance of an environment light which was found while the scene was built
+struct EnvironmentLightInstance
+{
+  HdriLight *light{nullptr};
+  mat4       transform{linalg::identity};
+};
+
+// Surfaces, volumes and lights of a group or of a world
+struct GroupContent
+{
+  explicit GroupContent(Object *owner);
+
+  // reads the parameters 'surface', 'volume' and 'light' of the owner
+  void commit();
+
+  box3 bounds() const;
+
+  void attachToScene(rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes,
+      SceneItems &items, std::vector<EnvironmentLightInstance> &environmentLights) const;
+
+ private:
+  Object                                 *m_owner{};
+  helium::ChangeObserverPtr<ObjectArray> m_surface_data;
+  helium::ChangeObserverPtr<ObjectArray> m_volume_data;
+  helium::ChangeObserverPtr<ObjectArray> m_light_data;
+};
 
 struct Group : public SceneObject
 {
  public:
-  Group();
-  void commit() override;
-  void attachToScene(rpr_scene scene, mat4 transform);
+  explicit Group(RPRGlobalState *s);
+  void commitParameters() override;
+  box3 bounds() const override;
+
+  const GroupContent &content() const;
 
  private:
-  std::vector<Surface *> m_surfaces;
-  std::vector<Volume *>  m_volumes;
-  std::vector<Light *>   m_lights;
+  GroupContent m_content;
 };
 
 } // namespace rpr

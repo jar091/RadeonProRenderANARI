@@ -20,18 +20,27 @@ limitations under the License.
 namespace anari {
 namespace rpr {
 
-struct Group;
-
 struct Instance : public SceneObject
 {
  public:
-  Instance();
-  void commit() override;
-  void attachToScene(rpr_scene scene);
+  explicit Instance(RPRGlobalState *s);
+  void commitParameters() override;
+  void finalize() override;
+  bool isValid() const override;
+  box3 bounds() const override;
+
+  void attachToScene(
+      rpr_scene scene, SceneItems &items, std::vector<EnvironmentLightInstance> &environmentLights) const;
 
  private:
-  IntrusivePtr<Group> m_group;
-  mat4                m_transform{};
+  // calls a function for every transformation of the instance
+  template <typename FCN_T>
+  void forEachTransform(FCN_T &&fcn) const;
+
+  helium::IntrusivePtr<Group>        m_group;
+  mat4                               m_transform{linalg::identity};
+  helium::ChangeObserverPtr<Array1D> m_transform_array; // KHR_INSTANCE_TRANSFORM_ARRAY
+  UniformAttributeSet                m_uniform_attributes;
 };
 } // namespace rpr
 

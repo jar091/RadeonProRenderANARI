@@ -13,128 +13,205 @@ limitations under the License.
 
 #include "Geometry.h"
 // specific types
-#include "attributes/PerShapeAttribute.h"
-#include "attributes/PrimVarAttribute.h"
+#include "Isosurface.h"
 #include "mesh/Quad.h"
 #include "mesh/Triangles.h"
 #include "primitives/Cones.h"
+#include "primitives/Curves.h"
 #include "primitives/Cylinders.h"
 #include "primitives/Spheres.h"
+// std
+#include <chrono>
 
 namespace anari {
 namespace rpr {
 
-Geometry::Geometry(rpr_context context, rpr_material_system materialSystem)
-    : m_context(context), m_matsys(materialSystem)
+using ArrayPtr = helium::ChangeObserverPtr<Array1D>;
+
+Geometry::Geometry(RPRGlobalState *s)
+    : SceneObject(ANARI_GEOMETRY, s),
+      m_vertex_attributes{ArrayPtr(this), ArrayPtr(this), ArrayPtr(this), ArrayPtr(this), ArrayPtr(this)},
+      m_primitive_attributes{ArrayPtr(this), ArrayPtr(this), ArrayPtr(this), ArrayPtr(this), ArrayPtr(this)}
+{}
+
+Geometry *Geometry::createInstance(std::string_view type, RPRGlobalState *s)
 {
-  setCommitPriority(COMMIT_PRIORITY_GEOMETRY);
+  if (type == "triangle")
+  {
+    return new Triangles(s);
+  }
+  if (type == "quad")
+  {
+    return new Quad(s);
+  }
+  if (type == "sphere")
+  {
+    return new Spheres(s);
+  }
+  if (type == "cylinder")
+  {
+    return new Cylinders(s);
+  }
+  if (type == "cone")
+  {
+    return new Cones(s);
+  }
+  if (type == "curve")
+  {
+    return new Curves(s);
+  }
+  if (type == "isosurface")
+  {
+    return new Isosurface(s);
+  }
+  return (Geometry *)new UnknownObject(ANARI_GEOMETRY, type, s);
 }
 
-Geometry *Geometry::createInstance(rpr_context context, rpr_material_system materialSystem, const char *type)
+void Geometry::commitParameters()
 {
-  if (std::strcmp(type, "triangle") == 0)
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
   {
-    return new Triangles(context, materialSystem);
+    const std::string name = attributeName(slot);
+
+    m_uniform_attributes[slot].reset();
+    float4 value = DEFAULT_ATTRIBUTE_VALUE;
+    if (getParam(name, ANARI_FLOAT32_VEC4, &value))
+      m_uniform_attributes[slot] = value;
+
+    m_vertex_attributes[slot]    = getArray1D(this, "vertex." + name);
+    m_primitive_attributes[slot] = getArray1D(this, "primitive." + name);
   }
-  if (std::strcmp(type, "quad") == 0)
-  {
-    return new Quad(context, materialSystem);
-  }
-  if (std::strcmp(type, "sphere") == 0)
-  {
-    return new Spheres(context, materialSystem);
-  }
-  if (std::strcmp(type, "cylinder") == 0)
-  {
-    return new Cylinders(context, materialSystem);
-  }
-  if (std::strcmp(type, "cone") == 0)
-  {
-    return new Cones(context, materialSystem);
-  }
-  throw std::runtime_error("could not create geometry");
 }
 
-rpr_shape Geometry::getBaseShape()
+bool Geometry::isValid() const
+{
+  return m_base_shape != nullptr;
+}
+
+rpr_shape Geometry::getBaseShape() const
 {
   return m_base_shape;
 }
 
-Attribute *Geometry::getAttribute(const char *name)
+bool Geometry::hasAttribute(int slot) const
 {
-  if (m_attribute_map.find(name) != m_attribute_map.end())
-  {
-    return m_attribute_map[name];
-  }
-  if (std::strcmp(name, "worldPosition") == 0)
-  {
-    Attribute *attribute = Attribute::fromType(m_matsys, RPR_MATERIAL_NODE_LOOKUP_P);
-    m_attribute_map.emplace(name, attribute);
-    return attribute;
-  }
-  if (std::strcmp(name, "objectPosition") == 0)
-  {
-    Attribute *attribute = Attribute::fromType(m_matsys, RPR_MATERIAL_NODE_LOOKUP_P_LOCAL);
-    m_attribute_map.emplace(name, attribute);
-    return attribute;
-  }
-  if (std::strcmp(name, "objectNormal") == 0 || std::strcmp(name, "worldNormal") == 0)
-  {
-    Attribute *attribute = Attribute::fromType(m_matsys, RPR_MATERIAL_NODE_LOOKUP_N);
-    m_attribute_map.emplace(name, attribute);
-    return attribute;
-  }
-  return nullptr;
+  return m_has_attribute[slot];
 }
 
-bool Geometry::hasAttribute(const char *name)
+const UniformAttributeSet &Geometry::uniformAttributes() const
 {
-  return std::strcmp(name, "worldPosition") == 0 || std::strcmp(name, "worldNormal") == 0
-      || std::strcmp(name, "objectPosition") == 0 || std::strcmp(name, "objectNormal") == 0;
+  return m_uniform_attributes;
 }
 
-void Geometry::clearAttributes()
+bool Geometry::isInstanced() const
 {
-  for (std::pair<std::string, Attribute *> p : m_attribute_map)
+  return !m_instance_transforms.empty();
+}
+
+const std::vector<mat4> &Geometry::instanceTransforms() const
+{
+  return m_instance_transforms;
+}
+
+rpr_buffer Geometry::attributeBuffer(int slot) const
+{
+  return m_attribute_buffers[slot];
+}
+
+void Geometry::setInstances(std::vector<mat4> &&transforms,
+    const std::array<std::vector<float4>, NUM_ATTRIBUTES> &attributes, const box3 &bounds)
+{
+  m_instance_transforms = std::move(transforms);
+  m_bounds              = bounds;
+
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
   {
-    delete p.second;
+    if (attributes[slot].size() != m_instance_transforms.size() || attributes[slot].empty())
+      continue;
+    rpr_buffer_desc desc;
+    desc.nb_element           = rpr_uint(attributes[slot].size());
+    desc.element_type         = RPR_BUFFER_ELEMENT_TYPE_FLOAT32;
+    desc.element_channel_size = 4;
+    CHECK(rprContextCreateBuffer(deviceState()->context, &desc, attributes[slot].data(), &m_attribute_buffers[slot]))
   }
-  m_attribute_map.clear();
 }
 
-Attribute *Geometry::createPerShapeAttribute(const std::vector<vec4> &data, const char *name)
+const Array1D *Geometry::checkAttributeArray(const Array1D *array, size_t size, const char *level, int slot) const
 {
-  if (data.empty())
+  if (!array)
+    return nullptr;
+  if (array->size() < size)
   {
+    reportMessage(ANARI_SEVERITY_WARNING, "array '%s.%s' has %zu elements, but %zu are required, it is ignored",
+        level, attributeName(slot), array->size(), size);
     return nullptr;
   }
-  Attribute *attribute = new PerShapeAttribute(m_context, m_matsys, data.size(), (float *)data.data());
-  m_attribute_map.emplace(name, attribute);
-  return attribute;
+  return array;
 }
 
-Attribute *Geometry::createPrimVarAttribute(int key, const char *name)
+void Geometry::setMesh(const MeshView &mesh)
 {
-  Attribute *attribute = new PrimVarAttribute(m_matsys, key);
-  m_attribute_map.emplace(name, attribute);
-  return attribute;
-}
+  clearMesh();
 
-void Geometry::checkArraySizes(Array1D *array, size_t size, std::runtime_error exception)
-{
-  if (array && array->size() != size)
+  if (!mesh.positions || !mesh.indices || mesh.num_vertices == 0 || mesh.num_faces == 0)
+    return;
+
+  auto *state = deviceState();
+
+  const auto start = std::chrono::steady_clock::now();
+
+  const std::vector<rpr_int> faces(mesh.num_faces, rpr_int(mesh.face_size));
+
+  // The first two components of 'attribute0' are also the texture coordinates of the mesh, which RPR
+  // needs to calculate the tangents for normal mapping.
+  const float4 *texcoords = mesh.attributes[0];
+
+  CHECK(rprContextCreateMesh(state->context, (const rpr_float *)mesh.positions, mesh.num_vertices,
+      sizeof(float3), (const rpr_float *)mesh.normals, mesh.normals ? mesh.num_vertices : 0,
+      mesh.normals ? sizeof(float3) : 0, (const rpr_float *)texcoords, texcoords ? mesh.num_vertices : 0,
+      texcoords ? sizeof(float4) : 0, mesh.indices, sizeof(rpr_int), mesh.normals ? mesh.indices : nullptr,
+      mesh.normals ? sizeof(rpr_int) : 0, texcoords ? mesh.indices : nullptr, texcoords ? sizeof(rpr_int) : 0,
+      faces.data(), mesh.num_faces, &m_base_shape))
+  if (!m_base_shape)
+    return;
+
+  CHECK(rprShapeSetVisibility(m_base_shape, false)) // base shape is always invisible
+
+  for (int slot = 0; slot < NUM_ATTRIBUTES; slot++)
   {
-    throw exception;
+    if (!mesh.attributes[slot])
+      continue;
+    CHECK(rprShapeSetPrimvar(m_base_shape, rpr_uint(slot), (const rpr_float *)mesh.attributes[slot],
+        rpr_uint(mesh.num_vertices * 4), 4, RPR_PRIMVAR_INTERPOLATION_VERTEX))
+    m_has_attribute[slot] = true;
   }
+
+  for (size_t i = 0; i < mesh.num_vertices; i++)
+    m_bounds.extend(mesh.positions[i]);
+
+  const auto end = std::chrono::steady_clock::now();
+  reportMessage(ANARI_SEVERITY_DEBUG, "created RPR mesh with %zu vertices and %zu faces in %.2f s",
+      mesh.num_vertices, mesh.num_faces, std::chrono::duration<float>(end - start).count());
+}
+
+void Geometry::clearMesh()
+{
+  deviceState()->deleteLater(m_base_shape, DeleteOrder::SHAPE);
+  m_base_shape = nullptr;
+  m_has_attribute.fill(false);
+  resetBounds();
+
+  for (rpr_buffer &buffer : m_attribute_buffers)
+  {
+    deviceState()->deleteLater(buffer, DeleteOrder::DATA);
+    buffer = nullptr;
+  }
+  m_instance_transforms.clear();
 }
 
 Geometry::~Geometry()
 {
-  if (m_base_shape)
-  {
-    CHECK(rprObjectDelete(m_base_shape))
-  }
-  clearAttributes();
+  clearMesh();
 }
 
 } // namespace rpr

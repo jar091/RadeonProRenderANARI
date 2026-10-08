@@ -14,28 +14,37 @@ limitations under the License.
 #pragma once
 
 #include "../SceneObject.h"
+// std
+#include <vector>
 
 namespace anari {
 namespace rpr {
 
+// Scalar field which is sampled on a regular grid
 struct SpatialField : public SceneObject
 {
-  friend struct ScivisVolume;
+ public:
+  explicit SpatialField(RPRGlobalState *s);
+  static SpatialField *createInstance(std::string_view type, RPRGlobalState *s);
 
-  SpatialField() = default;
-  static SpatialField *createInstance(const char *type);
+  // number of samples of the grid along the axes
+  virtual uint3 size() const = 0;
+  // sample of the grid, the index is x + size.x * (y + size.y * z)
+  virtual float value(size_t index) const = 0;
+  // position of the first sample and distances between the samples
+  virtual float3 origin() const  = 0;
+  virtual float3 spacing() const = 0;
 
- protected:
-  static rpr_image_filter_type processFilter(const std::string &name);
-
-  std::vector<float32>  m_grid;
-  std::vector<uint32>   m_indices;
-  uvec3                 m_size{};
-  vec3                  m_position{};
-  vec3                  m_voxelSize{};
-  rpr_image_filter_type m_filterType{};
+  // RPR does not interpolate between the samples of a grid, so coarse fields are resampled with trilinear
+  // interpolation. This is the number of samples per sample of the field along every axis which results
+  // in a grid with about 'targetSize' samples along the longest axis.
+  static uint32_t resamplingFactor(const uint3 &size, uint32_t targetSize);
+  // Samples of the field on a grid with 'factor' samples per sample of the field and the same extent.
+  std::vector<float> resample(uint32_t factor, uint3 &resampledSize) const;
 };
 
 } // namespace rpr
+
 ANARI_TYPEFOR_SPECIALIZATION(rpr::SpatialField *, ANARI_SPATIAL_FIELD)
+
 } // namespace anari

@@ -19,8 +19,16 @@ namespace anari::rpr {
 
 struct Perspective : public Camera
 {
-  explicit Perspective(rpr_camera &camera);
-  void commit() override;
+  explicit Perspective(RPRGlobalState *s);
+  void  commitParameters() override;
+  void  finalize() override;
+  float depth(const float3 &point) const override;
+
+ private:
+  float m_sensor_height{24.f};
+  float m_fovy{pi / 3.f};
+  float m_focus_distance{1.f};
+  float m_aperture_radius{0.f};
 };
 
 } // namespace anari::rpr

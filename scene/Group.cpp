@@ -13,72 +13,88 @@ limitations under the License.
 
 #include "Group.h"
 #include "geometry/Surface.h"
+#include "lights/analytic/HdriLight.h"
 #include "lights/Light.h"
 #include "volume/Volume.h"
 
 namespace anari {
 namespace rpr {
 
-Group::Group()
+// calls a function for all valid objects of an array of objects
+template <typename OBJECT_T, typename FCN_T>
+static void forEachValidObject(const ObjectArray *array, ANARIDataType type, FCN_T &&fcn)
 {
-  setCommitPriority(COMMIT_PRIORITY_GROUP);
-}
-
-void Group::commit()
-{
-  auto surfaces = getParamObject<ObjectArray>("surface");
-  auto lights   = getParamObject<ObjectArray>("light");
-  auto volumes  = getParamObject<ObjectArray>("volume");
-  m_surfaces.clear();
-  m_volumes.clear();
-  m_lights.clear();
-
-  resetBounds();
-
-  if (surfaces)
+  if (!array)
+    return;
+  for (auto **object = array->handlesBegin(); object != array->handlesEnd(); ++object)
   {
-    for (int surface_number = 0; surface_number < surfaces->size(); surface_number++)
-    {
-      Surface *surface = ((Surface **)surfaces->handles())[surface_number];
-      extendBounds(surface->bounds());
-      m_surfaces.push_back(surface);
-    }
-  }
-
-  if (lights)
-  {
-    for (int light_number = 0; light_number < lights->size(); light_number++)
-    {
-      Light *light = ((Light **)lights->handles())[light_number];
-      m_lights.push_back(light);
-    }
-  }
-
-  if (volumes)
-  {
-    for (int volume_number = 0; volume_number < volumes->size(); volume_number++)
-    {
-      Volume *volume = ((Volume **)volumes->handles())[volume_number];
-      extendBounds(volume->bounds());
-      m_volumes.push_back(volume);
-    }
+    if (*object && (*object)->type() == type && (*object)->isValid())
+      fcn((OBJECT_T *)*object);
   }
 }
 
-void Group::attachToScene(rpr_scene scene, mat4 transform)
+// GroupContent definitions ///////////////////////////////////////////////////
+
+GroupContent::GroupContent(Object *owner)
+    : m_owner(owner), m_surface_data(owner), m_volume_data(owner), m_light_data(owner)
+{}
+
+void GroupContent::commit()
 {
-  for (Light *light : m_lights)
-  {
-    light->attachToScene(scene, transform);
-  }
-  for (Surface *surface : m_surfaces)
-  {
-    surface->attachToScene(scene, transform);
-  }
-  for (Volume *volume : m_volumes)
-  {
-    volume->attachToScene(scene, transform);
-  }
+  m_surface_data = getObjectArray(m_owner, "surface");
+  m_volume_data  = getObjectArray(m_owner, "volume");
+  m_light_data   = getObjectArray(m_owner, "light");
+}
+
+box3 GroupContent::bounds() const
+{
+  box3 result = emptyBox();
+  forEachValidObject<Surface>(m_surface_data.get(), ANARI_SURFACE, [&](Surface *surface) {
+    const box3 b = surface->bounds();
+    if (!isEmpty(b))
+      result.extend(b);
+  });
+  forEachValidObject<Volume>(m_volume_data.get(), ANARI_VOLUME, [&](Volume *volume) {
+    const box3 b = volume->bounds();
+    if (!isEmpty(b))
+      result.extend(b);
+  });
+  return result;
+}
+
+void GroupContent::attachToScene(rpr_scene scene, const mat4 &transform,
+    const UniformAttributeSet &instanceAttributes, SceneItems &items,
+    std::vector<EnvironmentLightInstance> &environmentLights) const
+{
+  forEachValidObject<Light>(m_light_data.get(), ANARI_LIGHT, [&](Light *light) {
+    if (light->isEnvironmentLight())
+      environmentLights.push_back({(HdriLight *)light, transform});
+    else
+      light->attachToScene(scene, transform, items);
+  });
+  forEachValidObject<Surface>(m_surface_data.get(), ANARI_SURFACE,
+      [&](Surface *surface) { surface->attachToScene(scene, transform, instanceAttributes, items); });
+  forEachValidObject<Volume>(m_volume_data.get(), ANARI_VOLUME,
+      [&](Volume *volume) { volume->attachToScene(scene, transform, items); });
+}
+
+// Group definitions //////////////////////////////////////////////////////////
+
+Group::Group(RPRGlobalState *s) : SceneObject(ANARI_GROUP, s), m_content(this) {}
+
+void Group::commitParameters()
+{
+  m_content.commit();
+}
+
+box3 Group::bounds() const
+{
+  return m_content.bounds();
+}
+
+const GroupContent &Group::content() const
+{
+  return m_content;
 }
 
 } // namespace rpr

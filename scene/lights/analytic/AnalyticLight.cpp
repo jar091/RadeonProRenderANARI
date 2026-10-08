@@ -15,22 +15,20 @@ limitations under the License.
 
 namespace anari::rpr {
 
-AnalyticLight::AnalyticLight(rpr_context &context) : Light(context) {}
+AnalyticLight::AnalyticLight(RPRGlobalState *s) : Light(s) {}
 
-void AnalyticLight::attachToScene(rpr_scene scene, mat4 transform)
+void AnalyticLight::attachLight(rpr_scene scene, rpr_light light, const mat4 &transform, SceneItems &items)
 {
-  std::vector<void *> instances;
-  getInstances(instances, transform);
-  for (void *instance : instances)
-  {
-    CHECK(rprSceneAttachLight(scene, instance));
-    m_instances.push_back(instance);
-  }
+  if (!light)
+    return;
+  CHECK(rprLightSetTransform(light, false, &transform[0][0]))
+  CHECK(rprSceneAttachLight(scene, light))
+  items.lights.push_back(light);
 }
 
-float32 AnalyticLight::calculateSteradianAngle(float32 angle)
+float AnalyticLight::calculateSteradianAngle(float angle)
 {
-  return (2 * pi<float32>() * (1 - cos(angle / 2)));
+  return 2.f * pi * (1.f - std::cos(angle / 2.f));
 }
 
 } // namespace anari::rpr

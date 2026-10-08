@@ -1,49 +1,72 @@
 # RadeonProRender ANARI device
 ## Description
-This is implementation of ANARI device based on RadeonProRender engine
+This is an implementation of an [ANARI](https://www.khronos.org/anari/) device based on the
+[RadeonProRender](https://github.com/GPUOpen-LibrariesAndSDKs/RadeonProRenderSDK) engine
+(Northstar plugin). The ANARI library is called `rpr` (`anari_library_rpr`).
+
+The device is built on the helium layer of the ANARI SDK and follows ANARI 1.0. It was
+tested with ANARI SDK 0.17 and RadeonProRender SDK 3.1.7.1 on Windows with an NVIDIA GPU.
+The Linux and macOS builds and AMD GPUs (HIP) are not tested.
 ## Implementation details
+### Device
+* device parameters (set before the first object is created):
+  * `computeDevice`: `gpu` (default), `cpu`, `gpu+cpu` or `opencl`
+  * `gpuIndex`: index of the GPU used for rendering
+  * `kernelsPath`: directory with the precompiled Northstar kernels (default: `hipbin` next to the device library)
+  * `cachePath`: directory for the RadeonProRender kernel cache (default: `cache` next to the device library)
+* the environment variables `ANARI_RPR_COMPUTE_DEVICE`, `ANARI_RPR_KERNELS_PATH` and `ANARI_RPR_CACHE_PATH` override these parameters
+* if the GPU context cannot be created, the device warns and renders on the CPU
+* the OpenCL back-end is only used when asked for; it is never a fallback
+### Frame
+* `channel.color` as `UFIXED8_RGBA_SRGB`, `UFIXED8_VEC4` or `FLOAT32_VEC4`, `channel.depth` as `FLOAT32`
+* `ANARI_KHR_FRAME_ACCUMULATION`: with `accumulation` enabled the samples accumulate until something is committed
+* other channels (normal, albedo, ids) are not supported
+### Renderer
+* subtype `default`: `background` (color or image), `ambientRadiance`, `ambientColor`, `pixelSamples`, `maxRayDepth`, `radianceClamp`
 ### Camera
-* supported types: perspective and orthographic
-* `transform` parameter overrides `position`, `direction` and `up` parameters
-* `imageRegion` parameter is not supported now
-* `focusDistance` and `apertureRadius` parameters are only supported by perspective camera
-* both cameras have an additional parameter `sensorHeight`. Sensor width will be calculated using `aspect` parameter. Default sensor height is 24 mm
-* orthographic camera has an additional parameter `orthoHeight`. It determines the area which the Orthographic camera projection will cover. Width will be calculated using `aspect` parameter. Default value is 1
+* supported types: `perspective` (with depth of field) and `orthographic`
+* `imageRegion` is not supported
 ### Geometry
-* curve geometry type is not supported now
-* general parameters (`primitive.color`, `primitive.attribute`, `primitive.id`) are not supported
-* `vertex.color` can only accept float32 types (`FLOAT32`, `FLOAT32_VEC2`, `FLOAT32_VEC3`, `FLOAT32_VEC4`)
-* `vertex.normal` can only accept `FLOAT32` values
-* `primitive.index` can only accept uint32 values and vectors
+* `triangle` and `quad` are RadeonProRender meshes
+* `sphere` is rendered with instances of one sphere mesh
+* `cylinder`, `cone` and `curve` are tessellated
+* `isosurface` is extracted from `structuredRegular` fields
+### Materials and samplers
+* `matte` and `physicallyBased` use the RadeonProRender uber material; every parameter can be a constant, an attribute or a sampler
+* samplers: `image1D`, `image2D`, `image3D` (emulated with a 2D atlas) and `transform`
+* the `primitive` sampler, `clampToBorder`, `thickness`, attenuation, iridescence and `clearcoatNormal` are not supported
+### Lights
+* `directional`, `point`, `spot`, `quad`, `hdri` and `ring` (approximated by a disk light), with the units of the ANARI specification
+* a visible `hdri` light replaces the renderer background; only one `hdri` light per world is used
 ### Volumes
-* data in spatial fields can be only in float32 format (`ARRAY3D` of `FLOAT32`)
-* `color` can only accept float32 types (`FLOAT32`, `FLOAT32_VEC2`, `FLOAT32_VEC3`, `FLOAT32_VEC4`)
-* `color.position` and `opacity.position` parameters are not supported
-### Features which are not implemented yet
-* object introspection
-* stereo mode of cameras
-* depth framebuffer
-* curve geometry
-* KHR_AUXILIARY_BUFFERS
-* ANARI_KHR_TRANSFORMATION_MOTION_BLUR
+* `structuredRegular` spatial fields with `transferFunction1D` volumes
+* other spatial fields (`unstructured`, ...) are not supported
+### Features which are not implemented
+* motion blur and stereo cameras
+* frame channels other than color and depth
 ## Dependencies
-[ANARI SDK](https://github.com/KhronosGroup/ANARI-SDK) must be installed on computer before RPR device building.
+* [ANARI SDK](https://github.com/KhronosGroup/ANARI-SDK) 0.17, installed before the device is built
+* [RadeonProRender SDK](https://github.com/GPUOpen-LibrariesAndSDKs/RadeonProRenderSDK) 3.1.7.1 with its `hipbin` submodule (the precompiled kernels). CMake downloads it, unless `RPR_SDK_ROOT` points to a checkout.
+* on NVIDIA GPUs: the CUDA 13 runtime (`cudart64_13.dll`), which Northstar loads. Set `RPR_CUDA_RUNTIME_LIBRARY` to install it next to the device.
 ## Building the device
-The repository uses CMake 3.11+ to build the device
-For example, to build (must be in a separate directory from the source directory), you can do:
+The repository uses CMake to build the device, in a directory separate from the source directory.
+### Windows
+Visual Studio 2022 is used:
+```shell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
+  -Danari_DIR=path/to/anari/lib/cmake/anari-0.17.0 ^
+  -DRPR_SDK_ROOT=path/to/RadeonProRenderSDK ^
+  -DRPR_CUDA_RUNTIME_LIBRARY=path/to/cudart64_13.dll ^
+  -DCMAKE_INSTALL_PREFIX=path/to/install
+cmake --build build --config Release
+cmake --install build --config Release
+```
+The install step copies the device, `RadeonProRender64.dll`, `Northstar64.dll`, the CUDA
+runtime and the kernels (548 MB, `-DRPR_ANARI_INSTALL_KERNELS=OFF` skips them) into
+`bin`. The device loads them from its own directory.
 ### UNIX-like systems
 ```shell
-cd path/to/source
-mkdir build
-cd build
-cmake ..
-cmake --build . -t install
+cmake -S . -B build -Danari_DIR=path/to/anari/lib/cmake/anari-0.17.0 -DCMAKE_INSTALL_PREFIX=path/to/install
+cmake --build build -t install
 ```
-It's important to have directory with installed device in LD_LIBRARY_PATH
-### Windows
-Visual studio 17 or 19 must be installed. Building using MinGW may produce an error!
-* create build directory into directory with source code
-* run `cmake ..` from build directory
-* run `cmake --build .` from build directory
-
-Also, you can build project from Visual Studio IDE using CMake extension.
+The directory with the installed device has to be in `LD_LIBRARY_PATH`.

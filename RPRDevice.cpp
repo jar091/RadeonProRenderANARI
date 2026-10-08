@@ -1,5 +1,4 @@
 /**********************************************************************
-Copyright 2021 The Khronos Group
 Copyright 2022 Advanced Micro Devices, Inc
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,8 +13,7 @@ limitations under the License.
 
 #include "RPRDevice.h"
 
-#include "anari/detail/Library.h"
-
+#include "Array.h"
 #include "camera/Camera.h"
 #include "frame/Frame.h"
 #include "material/Material.h"
@@ -30,42 +28,29 @@ limitations under the License.
 
 #include "version.h"
 
+// generated query functions
+#include "anari_library_rpr_queries.h"
+
 // std
-#include <chrono>
-#include <exception>
+#include <cstdlib>
 #include <limits>
-#include <map>
+#include <mutex>
 
 // Define list of available render plugins
-#if defined(WIN32)
-std::map<std::string, std::string> RPRPlugins = {{"Northstar", "Northstar64.dll"}};
-//{"HybridPro", "HybridPro.dll"}}; // hybrid support will be added later
+#if defined(_WIN32)
+static const char *RPRPluginNorthstar = "Northstar64.dll";
 #elif defined(__APPLE__)
-std::map<std::string, std::string> RPRPlugins = {{"Northstar", "libNorthstar64.dylib"}};
+static const char *RPRPluginNorthstar = "libNorthstar64.dylib";
 #else
-std::map<std::string, std::string> RPRPlugins = {{"Northstar", "libNorthstar64.so"}};
-//{"HybridPro", "./HybridPro.so"}}; // hybrid support will be added later
+static const char *RPRPluginNorthstar = "libNorthstar64.so";
 #endif
 
-std::map<unsigned int, unsigned int> RPRDeviceMap = {
-    {0, RPR_CREATION_FLAGS_ENABLE_CPU},
-    {1, RPR_CREATION_FLAGS_ENABLE_GPU0},
-    {2, RPR_CREATION_FLAGS_ENABLE_GPU1},
-    {3, RPR_CREATION_FLAGS_ENABLE_GPU2},
-    {4, RPR_CREATION_FLAGS_ENABLE_GPU3},
-    {5, RPR_CREATION_FLAGS_ENABLE_GPU4},
-    {6, RPR_CREATION_FLAGS_ENABLE_GPU5},
-    {7, RPR_CREATION_FLAGS_ENABLE_GPU6},
-    {8, RPR_CREATION_FLAGS_ENABLE_GPU7},
-    {9, RPR_CREATION_FLAGS_ENABLE_GPU8},
-    {10, RPR_CREATION_FLAGS_ENABLE_GPU9},
-    {11, RPR_CREATION_FLAGS_ENABLE_GPU10},
-    {12, RPR_CREATION_FLAGS_ENABLE_GPU11},
-    {13, RPR_CREATION_FLAGS_ENABLE_GPU12},
-    {14, RPR_CREATION_FLAGS_ENABLE_GPU13},
-    {15, RPR_CREATION_FLAGS_ENABLE_GPU14},
-    {16, RPR_CREATION_FLAGS_ENABLE_GPU15},
-};
+static const rpr_creation_flags RPRGpuFlags[] = {RPR_CREATION_FLAGS_ENABLE_GPU0, RPR_CREATION_FLAGS_ENABLE_GPU1,
+    RPR_CREATION_FLAGS_ENABLE_GPU2, RPR_CREATION_FLAGS_ENABLE_GPU3, RPR_CREATION_FLAGS_ENABLE_GPU4,
+    RPR_CREATION_FLAGS_ENABLE_GPU5, RPR_CREATION_FLAGS_ENABLE_GPU6, RPR_CREATION_FLAGS_ENABLE_GPU7,
+    RPR_CREATION_FLAGS_ENABLE_GPU8, RPR_CREATION_FLAGS_ENABLE_GPU9, RPR_CREATION_FLAGS_ENABLE_GPU10,
+    RPR_CREATION_FLAGS_ENABLE_GPU11, RPR_CREATION_FLAGS_ENABLE_GPU12, RPR_CREATION_FLAGS_ENABLE_GPU13,
+    RPR_CREATION_FLAGS_ENABLE_GPU14, RPR_CREATION_FLAGS_ENABLE_GPU15};
 
 namespace anari::rpr {
 
@@ -73,561 +58,499 @@ namespace anari::rpr {
 // Helper functions ///////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-template <typename T>
-inline void writeToVoidP(void *_p, T v)
+// Registers the Northstar plugin once per process, returns its ID or -1
+static rpr_int registerPlugin()
 {
-  T *p = (T *)_p;
-  *p   = v;
+  static rpr_int        pluginID = -1;
+  static std::once_flag once;
+  std::call_once(once, []() {
+    loadRPRLibrary();
+    // the plugin is expected next to the device library
+    const std::string path = deviceLibraryDirectory() + RPRPluginNorthstar;
+    pluginID               = rprRegisterPlugin(path.c_str());
+    if (pluginID == -1)
+      pluginID = rprRegisterPlugin(RPRPluginNorthstar);
+  });
+  return pluginID;
 }
-
-template <typename T, typename... Args>
-inline T *createRegisteredObject(Args &&...args)
-{
-  return new T(std::forward<Args>(args)...);
-}
-
-template <typename HANDLE_T, typename OBJECT_T>
-inline HANDLE_T getHandleForAPI(OBJECT_T *object)
-{
-  return (HANDLE_T)object;
-}
-
-template <typename OBJECT_T, typename HANDLE_T, typename... Args>
-inline HANDLE_T createObjectForAPI(Args &&...args)
-{
-  auto o = createRegisteredObject<OBJECT_T>(std::forward<Args>(args)...);
-  o->setObjectType(ANARITypeFor<HANDLE_T>::value);
-  return getHandleForAPI<HANDLE_T>(o);
-}
-
-template <typename HANDLE_T>
-inline HANDLE_T createPlaceholderObject()
-{
-  return createObjectForAPI<Object, HANDLE_T>();
-}
-
-template <typename OBJECT_T = Object, typename HANDLE_T = ANARIObject>
-inline OBJECT_T &referenceFromHandle(HANDLE_T handle)
-{
-  return *((OBJECT_T *)handle);
-}
-
-using SetParamFcn = void(ANARIObject, const char *, const void *);
-
-template <typename T>
-static void setParamOnObject(ANARIObject obj, const char *p, const T &v)
-{
-  referenceFromHandle(obj).setParam(p, v);
-}
-
-static void removeParamOnObject(ANARIObject obj, const char *p)
-{
-  referenceFromHandle(obj).removeParam(p);
-}
-
-#define declare_param_setter(TYPE)                                                                           \
-  {                                                                                                          \
-    ANARITypeFor<TYPE>::value,                                                                               \
-        [](ANARIObject o, const char *p, const void *v) { setParamOnObject(o, p, *(TYPE *)v); }              \
-  }
-
-#define declare_param_setter_object(TYPE)                                                                    \
-  {                                                                                                          \
-    ANARITypeFor<TYPE>::value, [](ANARIObject o, const char *p, const void *v) {                             \
-      using OBJECT_T = typename std::remove_pointer<TYPE>::type;                                             \
-      auto ptr       = *((TYPE *)v);                                                                         \
-      if (ptr)                                                                                               \
-        setParamOnObject(o, p, IntrusivePtr<OBJECT_T>(ptr));                                                 \
-      else                                                                                                   \
-        removeParamOnObject(o, p);                                                                           \
-    }                                                                                                        \
-  }
-
-#define declare_param_setter_string(TYPE)                                                                    \
-  {                                                                                                          \
-    ANARITypeFor<TYPE>::value, [](ANARIObject o, const char *p, const void *v) {                             \
-      const char *str = (const char *)v;                                                                     \
-      setParamOnObject(o, p, std::string(str));                                                              \
-    }                                                                                                        \
-  }
-
-#define declare_param_setter_void_ptr(TYPE)                                                                  \
-  {                                                                                                          \
-    ANARITypeFor<TYPE>::value,                                                                               \
-        [](ANARIObject o, const char *p, const void *v) { setParamOnObject(o, p, const_cast<void *>(v)); }   \
-  }
-
-static std::map<int, SetParamFcn *> setParamFcns = {
-    declare_param_setter(ANARIDataType),
-    declare_param_setter(Device *),
-    declare_param_setter_void_ptr(void *),
-    declare_param_setter(ANARIFrameCompletionCallback),
-    declare_param_setter(bool),
-    declare_param_setter_object(Object *),
-    declare_param_setter_object(Camera *),
-    declare_param_setter_object(Array *),
-    declare_param_setter_object(Array1D *),
-    declare_param_setter_object(Array2D *),
-    declare_param_setter_object(Array3D *),
-    declare_param_setter_object(Frame *),
-    declare_param_setter_object(Geometry *),
-    declare_param_setter_object(Group *),
-    declare_param_setter_object(Instance *),
-    declare_param_setter_object(Light *),
-    declare_param_setter_object(Material *),
-    declare_param_setter_object(Renderer *),
-    declare_param_setter_object(Sampler *),
-    declare_param_setter_object(Surface *),
-    declare_param_setter_object(SpatialField *),
-    declare_param_setter_object(Volume *),
-    declare_param_setter_object(World *),
-    declare_param_setter_string(const char *),
-    declare_param_setter(char),
-    declare_param_setter(unsigned char),
-    declare_param_setter(short),
-    declare_param_setter(int),
-    declare_param_setter(unsigned int),
-    declare_param_setter(long),
-    declare_param_setter(unsigned long),
-    declare_param_setter(long long),
-    declare_param_setter(unsigned long long),
-    declare_param_setter(float),
-    declare_param_setter(double),
-    declare_param_setter(ivec2),
-    declare_param_setter(ivec3),
-    declare_param_setter(ivec4),
-    declare_param_setter(uvec2),
-    declare_param_setter(uvec3),
-    declare_param_setter(uvec4),
-    declare_param_setter(vec2),
-    declare_param_setter(vec3),
-    declare_param_setter(vec4),
-    declare_param_setter(mat2),
-    declare_param_setter(mat3),
-    declare_param_setter(mat3x2),
-    declare_param_setter(mat4x3),
-    declare_param_setter(mat4)};
-
-#undef declare_param_setter
-#undef declare_param_setter_object
-#undef declare_param_setter_string
-#undef declare_param_setter_void_ptr
 
 ///////////////////////////////////////////////////////////////////////////////
-// ExampleDevice definitions //////////////////////////////////////////////////
+// RPRDevice definitions //////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
-
-int RPRDevice::deviceImplements(const char *_extension)
-{
-  std::string extension = _extension;
-  if (extension == "ANARI_KHR_AREA_LIGHTS")
-    return 1;
-  if (extension == "ANARI_KHR_FRAME_COMPLETION_CALLBACK")
-    return 1;
-  return 0;
-}
-
-void RPRDevice::deviceSetParameter(const char *_id, ANARIDataType type, const void *mem)
-{
-  std::string id = _id;
-  if (type == ANARI_STRING)
-    setParam(id, std::string((static_cast<const char *>(mem))));
-  else if (type == ANARI_UINT32)
-    setParam(id, *(static_cast<const unsigned int *>(mem)));
-}
-
-void RPRDevice::deviceUnsetParameter(const char *id)
-{
-  removeParam(id);
-}
-
-void RPRDevice::deviceCommit()
-{
-  m_plugin_name   = getParam<std::string>("RPRPlugin", m_plugin_name);
-  m_render_device = getParam<unsigned int>("RPRDevice", m_render_device);
-
-  // Register rendering plugin
-  rpr_int pluginID = rprRegisterPlugin(RPRPlugins[m_plugin_name].c_str());
-  CHECK_NE(pluginID, -1)
-  rpr_int plugins[]   = {pluginID};
-  size_t  pluginCount = sizeof(plugins) / sizeof(plugins[0]);
-
-  // Create context the selected GPU
-  // TODO handle multiple devices
-  rpr_creation_flags flags = RPRDeviceMap[m_render_device];
-#ifdef __APPLE__
-  flags |= RPR_CREATION_FLAGS_ENABLE_METAL;
-#endif
-  CHECK(rprCreateContext(RPR_API_VERSION, plugins, pluginCount, flags, nullptr, nullptr, &m_context));
-
-  // Set active plugin.
-  CHECK(rprContextSetActivePlugin(m_context, plugins[0]));
-
-  CHECK(rprContextSetParameterByKey1u(m_context, RPR_CONTEXT_Y_FLIP, 0))
-
-  CHECK(rprContextCreateMaterialSystem(m_context, 0, &m_matsys))
-}
-
-void RPRDevice::deviceRetain()
-{
-  this->refInc();
-}
-
-void RPRDevice::deviceRelease()
-{
-  this->refDec();
-}
 
 // Data Arrays ////////////////////////////////////////////////////////////////
 
-ANARIArray1D RPRDevice::newArray1D(void *appMemory, ANARIMemoryDeleter deleter, void *userData,
-    ANARIDataType type, uint64_t numItems, uint64_t byteStride)
+ANARIArray1D RPRDevice::newArray1D(const void *appMemory, ANARIMemoryDeleter deleter, const void *userData,
+    ANARIDataType type, uint64_t numItems)
 {
-  if (isObject(type))
-  {
-    return createObjectForAPI<ObjectArray, ANARIArray1D>(
-        appMemory, deleter, userData, type, numItems, byteStride);
-  } else
-  {
-    return createObjectForAPI<Array1D, ANARIArray1D>(
-        appMemory, deleter, userData, type, numItems, byteStride);
-  }
+  initDevice();
+
+  Array1DMemoryDescriptor md;
+  md.appMemory   = appMemory;
+  md.deleter     = deleter;
+  md.deleterPtr  = userData;
+  md.elementType = type;
+  md.numItems    = numItems;
+
+  if (anari::isObject(type))
+    return (ANARIArray1D) new ObjectArray(deviceState(), md);
+  else
+    return (ANARIArray1D) new Array1D(deviceState(), md);
 }
 
-ANARIArray2D RPRDevice::newArray2D(void *appMemory, ANARIMemoryDeleter deleter, void *userData,
-    ANARIDataType type, uint64_t numItems1, uint64_t numItems2, uint64_t byteStride1, uint64_t byteStride2)
+ANARIArray2D RPRDevice::newArray2D(const void *appMemory, ANARIMemoryDeleter deleter, const void *userData,
+    ANARIDataType type, uint64_t numItems1, uint64_t numItems2)
 {
-  return createObjectForAPI<Array2D, ANARIArray2D>(
-      appMemory, deleter, userData, type, numItems1, numItems2, byteStride1, byteStride2);
+  initDevice();
+
+  Array2DMemoryDescriptor md;
+  md.appMemory   = appMemory;
+  md.deleter     = deleter;
+  md.deleterPtr  = userData;
+  md.elementType = type;
+  md.numItems1   = numItems1;
+  md.numItems2   = numItems2;
+
+  return (ANARIArray2D) new Array2D(deviceState(), md);
 }
 
-ANARIArray3D RPRDevice::newArray3D(void *appMemory, ANARIMemoryDeleter deleter, void *userData,
-    ANARIDataType type, uint64_t numItems1, uint64_t numItems2, uint64_t numItems3, uint64_t byteStride1,
-    uint64_t byteStride2, uint64_t byteStride3)
+ANARIArray3D RPRDevice::newArray3D(const void *appMemory, ANARIMemoryDeleter deleter, const void *userData,
+    ANARIDataType type, uint64_t numItems1, uint64_t numItems2, uint64_t numItems3)
 {
-  return createObjectForAPI<Array3D, ANARIArray3D>(appMemory, deleter, userData, type, numItems1, numItems2,
-      numItems3, byteStride1, byteStride2, byteStride3);
-}
+  initDevice();
 
-void *RPRDevice::mapArray(ANARIArray a)
-{
-  return referenceFromHandle<Array>(a).map();
-}
+  Array3DMemoryDescriptor md;
+  md.appMemory   = appMemory;
+  md.deleter     = deleter;
+  md.deleterPtr  = userData;
+  md.elementType = type;
+  md.numItems1   = numItems1;
+  md.numItems2   = numItems2;
+  md.numItems3   = numItems3;
 
-void RPRDevice::unmapArray(ANARIArray a)
-{
-  referenceFromHandle<Array>(a).unmap();
+  return (ANARIArray3D) new Array3D(deviceState(), md);
 }
 
 // Renderable Objects /////////////////////////////////////////////////////////
 
 ANARILight RPRDevice::newLight(const char *type)
 {
-  return (ANARILight)Light::createInstance(m_context, m_matsys, type);
+  initDevice();
+  return (ANARILight)Light::createInstance(type, deviceState());
 }
 
 ANARICamera RPRDevice::newCamera(const char *type)
 {
-  return (ANARICamera)Camera::createInstance(m_context, type);
+  initDevice();
+  return (ANARICamera)Camera::createInstance(type, deviceState());
 }
 
 ANARIGeometry RPRDevice::newGeometry(const char *type)
 {
-  return (ANARIGeometry)Geometry::createInstance(m_context, m_matsys, type);
+  initDevice();
+  return (ANARIGeometry)Geometry::createInstance(type, deviceState());
 }
 
 ANARISpatialField RPRDevice::newSpatialField(const char *type)
 {
-  return (ANARISpatialField)SpatialField::createInstance(type);
+  initDevice();
+  return (ANARISpatialField)SpatialField::createInstance(type, deviceState());
 }
 
 ANARISurface RPRDevice::newSurface()
 {
-  return createObjectForAPI<Surface, ANARISurface>(m_matsys);
+  initDevice();
+  return (ANARISurface) new Surface(deviceState());
 }
 
 ANARIVolume RPRDevice::newVolume(const char *type)
 {
-  return (ANARIVolume)Volume::createInstance(type, m_context, m_matsys);
+  initDevice();
+  return (ANARIVolume)Volume::createInstance(type, deviceState());
 }
 
 // Model Meta-Data ////////////////////////////////////////////////////////////
 
 ANARIMaterial RPRDevice::newMaterial(const char *type)
 {
-  return (ANARIMaterial)Material::createInstance(type, m_matsys);
+  initDevice();
+  return (ANARIMaterial)Material::createInstance(type, deviceState());
 }
 
 ANARISampler RPRDevice::newSampler(const char *type)
 {
-  return (ANARISampler)Sampler::createInstance(type, m_context, m_matsys);
+  initDevice();
+  return (ANARISampler)Sampler::createInstance(type, deviceState());
 }
 
 // Instancing /////////////////////////////////////////////////////////////////
 
 ANARIGroup RPRDevice::newGroup()
 {
-  return createObjectForAPI<Group, ANARIGroup>();
+  initDevice();
+  return (ANARIGroup) new Group(deviceState());
 }
 
-ANARIInstance RPRDevice::newInstance()
+ANARIInstance RPRDevice::newInstance(const char *type)
 {
-  return createObjectForAPI<Instance, ANARIInstance>();
+  initDevice();
+  const std::string_view subtype = type ? type : "transform";
+  if (subtype != "transform")
+    return (ANARIInstance) new UnknownObject(ANARI_INSTANCE, subtype, deviceState());
+  return (ANARIInstance) new Instance(deviceState());
 }
 
 // Top-level Worlds ///////////////////////////////////////////////////////////
 
 ANARIWorld RPRDevice::newWorld()
 {
-  return createObjectForAPI<World, ANARIWorld>();
+  initDevice();
+  return (ANARIWorld) new World(deviceState());
 }
 
-int RPRDevice::getProperty(
-    ANARIObject object, const char *name, ANARIDataType type, void *mem, uint64_t size, ANARIWaitMask mask)
+// Query functions ////////////////////////////////////////////////////////////
+
+const char **RPRDevice::getObjectSubtypes(ANARIDataType objectType)
 {
-  if (mask == ANARI_WAIT)
-    flushCommitBuffer();
+  return anari_rpr::query_object_types(objectType);
+}
 
-  if ((void *)object == (void *)this)
-  {
-    std::string_view prop = name;
-    if (prop == "version" && type == ANARI_INT32)
-    {
-      int version = RPR_ANARI_VERSION_MAJOR * 10000 + RPR_ANARI_VERSION_MINOR * 100 + RPR_ANARI_VERSION_PATCH;
-      writeToVoidP(mem, version);
-      return 1;
-    }
-    if (prop == "version.major" && type == ANARI_INT32)
-    {
-      int version = RPR_ANARI_VERSION_MAJOR;
-      writeToVoidP(mem, version);
-      return 1;
-    }
-    if (prop == "version.minor" && type == ANARI_INT32)
-    {
-      int version = RPR_ANARI_VERSION_MINOR;
-      writeToVoidP(mem, version);
-      return 1;
-    }
-    if (prop == "version.patch" && type == ANARI_INT32)
-    {
-      int version = RPR_ANARI_VERSION_PATCH;
-      writeToVoidP(mem, version);
-      return 1;
-    }
-    if (prop == "geometryMaxIndex" && type == ANARI_UINT64)
-    {
-      uint64 limit = std::numeric_limits<rpr_int>::max();
-      writeToVoidP(mem, limit);
-      return 1;
-    }
-  } else
-    return referenceFromHandle(object).getProperty(name, type, mem, mask);
+const void *RPRDevice::getObjectInfo(
+    ANARIDataType objectType, const char *objectSubtype, const char *infoName, ANARIDataType infoType)
+{
+  return anari_rpr::query_object_info(objectType, objectSubtype, infoName, infoType);
+}
 
-  return 0;
+const void *RPRDevice::getParameterInfo(ANARIDataType objectType, const char *objectSubtype,
+    const char *parameterName, ANARIDataType parameterType, const char *infoName, ANARIDataType infoType)
+{
+  return anari_rpr::query_param_info(objectType, objectSubtype, parameterName, parameterType, infoName, infoType);
 }
 
 // Object + Parameter Lifetime Management /////////////////////////////////////
 
-void RPRDevice::setParameter(ANARIObject object, const char *name, ANARIDataType type, const void *mem)
+int RPRDevice::getProperty(
+    ANARIObject object, const char *name, ANARIDataType type, void *mem, uint64_t size, uint32_t mask)
 {
-  if (type == ANARI_UNKNOWN)
-    throw std::runtime_error("cannot set ANARI_UNKNOWN parameter type");
-
-  auto *fcn = setParamFcns[type];
-
-  if (fcn)
-    fcn(object, name, mem);
-  else
+  if ((void *)object != (void *)this_device() && mask == ANARI_WAIT)
   {
-    fprintf(stderr, "warning - no parameter setter for type '%i'\n", int(type));
+    // waiting for a property flushes the commit buffer, which creates and updates RPR objects
+    std::lock_guard<std::recursive_mutex> lock(deviceState()->rprMutex);
+    return helium::BaseDevice::getProperty(object, name, type, mem, size, mask);
   }
-}
-
-void RPRDevice::unsetParameter(ANARIObject o, const char *name)
-{
-  referenceFromHandle(o).removeParam(name);
-}
-
-void RPRDevice::commit(ANARIObject h)
-{
-  auto &o = referenceFromHandle(h);
-  o.refInc(RefType::INTERNAL);
-  if (o.commitPriority() != COMMIT_PRIORITY_DEFAULT)
-    m_needToSortCommits = true;
-  m_objectsToCommit.push_back(&o);
-}
-
-void RPRDevice::release(ANARIObject o)
-{
-  if (!o)
-    return;
-
-  auto &obj = referenceFromHandle(o);
-
-  bool privatizeArray =
-      isArray(obj.type()) && obj.useCount(RefType::INTERNAL) > 0 && obj.useCount(RefType::PUBLIC) == 1;
-
-  referenceFromHandle(o).refDec(RefType::PUBLIC);
-
-  if (privatizeArray)
-    ((Array *)o)->privatize();
-}
-
-void RPRDevice::retain(ANARIObject o)
-{
-  referenceFromHandle(o).refInc(RefType::PUBLIC);
+  return helium::BaseDevice::getProperty(object, name, type, mem, size, mask);
 }
 
 // Frame Manipulation /////////////////////////////////////////////////////////
 
 ANARIFrame RPRDevice::newFrame()
 {
-  return createObjectForAPI<Frame, ANARIFrame>(m_context);
-}
-
-const void *RPRDevice::frameBufferMap(ANARIFrame _fb, const char *channel)
-{
-  auto &fb = referenceFromHandle<Frame>(_fb);
-
-  if (channel == std::string("color"))
-    return fb.mapColorBuffer();
-  else if (channel == std::string("depth"))
-    return fb.mapDepthBuffer();
-  else
-    return nullptr;
-}
-
-void RPRDevice::frameBufferUnmap(ANARIFrame _fb, const char *channel)
-{
-  // no-op
+  initDevice();
+  return (ANARIFrame) new Frame(deviceState());
 }
 
 // Frame Rendering ////////////////////////////////////////////////////////////
 
 ANARIRenderer RPRDevice::newRenderer(const char *type)
 {
-  return (ANARIRenderer)Renderer::createInstance(m_context, type);
+  initDevice();
+  return (ANARIRenderer)Renderer::createInstance(type, deviceState());
 }
 
-void RPRDevice::renderFrame(ANARIFrame frame)
+// Other RPRDevice definitions ////////////////////////////////////////////////
+
+RPRDevice::RPRDevice(ANARIStatusCallback defaultCallback, const void *userPtr)
+    : helium::BaseDevice(defaultCallback, userPtr)
 {
-  flushCommitBuffer();
-
-  auto *f = &referenceFromHandle<Frame>(frame);
-
-  auto device_handle = this_device();
-
-  f->renewFuture();
-  auto future = f->future();
-
-  std::thread([=]() {
-    auto start = std::chrono::steady_clock::now();
-    f->renderFrame();
-    auto end = std::chrono::steady_clock::now();
-
-    f->invokeContinuation(device_handle);
-    f->setDuration(std::chrono::duration<float>(end - start).count());
-
-    future->markComplete();
-  }).detach();
+  m_state = std::make_unique<RPRGlobalState>(this_device());
+  deviceCommitParameters();
 }
 
-int RPRDevice::frameReady(ANARIFrame f, ANARIWaitMask m)
+RPRDevice::RPRDevice(ANARILibrary library) : helium::BaseDevice(library)
 {
-  auto &frame = referenceFromHandle<Frame>(f);
-  if (!frame.futureIsValid())
-    return 0;
-  else if (m == ANARI_NO_WAIT)
-    return frame.future()->isReady();
-  else
-  {
-    frame.future()->wait();
-    return 1;
-  }
-}
-
-void RPRDevice::discardFrame(ANARIFrame)
-{
-  // TODO
-}
-
-// Other RPRDevice definitions ////////////////////////////////////////////
-
-RPRDevice::RPRDevice()
-{
-  deviceCommit();
+  m_state = std::make_unique<RPRGlobalState>(this_device());
+  deviceCommitParameters();
 }
 
 RPRDevice::~RPRDevice()
 {
-  CHECK(rprObjectDelete(m_matsys))
-  CheckNoLeak(m_context);
-  CHECK(rprObjectDelete(m_context));
-  m_context = nullptr; // Always delete the RPR Context last.
+  auto &state = *deviceState();
+
+  state.taskQueue.flush();
+
+  std::lock_guard<std::recursive_mutex> lock(state.rprMutex);
+  state.commitBuffer.clear();
+  state.collectGarbage();
+
+  reportMessage(ANARI_SEVERITY_DEBUG, "destroying rpr device (%p)", this);
+
+  state.deleteObject(state.matsys, "rprObjectDelete(matsys)");
+  state.matsys = nullptr;
+
+  rpr_context context = state.context;
+  state.context       = nullptr; // Always delete the RPR Context last.
+  state.deleteObject(context, "rprObjectDelete(context)");
 }
 
-void RPRDevice::flushCommitBuffer()
+bool RPRDevice::createContext(
+    rpr_creation_flags flags, const std::string &kernelsPath, const std::string &cachePath)
 {
-  if (m_needToSortCommits)
+  auto &state = *deviceState();
+
+  const rpr_int pluginID = registerPlugin();
+  if (pluginID == -1)
   {
-    std::sort(m_objectsToCommit.begin(), m_objectsToCommit.end(),
-        [](Object *o1, Object *o2) { return o1->commitPriority() < o2->commitPriority(); });
+    reportMessage(ANARI_SEVERITY_ERROR, "failed to register RadeonProRender plugin '%s'", RPRPluginNorthstar);
+    return false;
+  }
+  rpr_int plugins[]   = {pluginID};
+  size_t  pluginCount = sizeof(plugins) / sizeof(plugins[0]);
+
+#ifdef __APPLE__
+  flags |= RPR_CREATION_FLAGS_ENABLE_METAL;
+#endif
+
+  // rpr_context_properties is a list of <property name>, <value> terminated by a null name
+  const rpr_context_properties properties[] = {
+      // the folder of the precompiled kernels of Northstar (HIP for AMD and CUDA for NVIDIA GPUs)
+      (rpr_context_properties)RPR_CONTEXT_PRECOMPILED_BINARY_PATH,
+      (rpr_context_properties)kernelsPath.c_str(),
+      (rpr_context_properties)0,
+  };
+
+  // without cache path RPR writes its cache to the directory 'cache' of the working directory
+  rpr_context      context = nullptr;
+  const rpr_status status  = createContextGuarded(
+      plugins, pluginCount, flags, properties, cachePath.empty() ? nullptr : cachePath.c_str(), &context);
+  if (status != RPR_SUCCESS || !context)
+  {
+    reportMessage(ANARI_SEVERITY_WARNING, "failed to create RadeonProRender context with flags 0x%x (error %d)",
+        unsigned(flags), int(status));
+    return false;
   }
 
-  m_needToSortCommits = false;
+  state.context = context;
 
-  for (auto o : m_objectsToCommit)
+  // Set active plugin.
+  CHECK(rprContextSetActivePlugin(state.context, plugins[0]))
+  CHECK(rprContextSetParameterByKey1u(state.context, RPR_CONTEXT_Y_FLIP, 0))
+  // textures are converted to linear colors by the device
+  CHECK(rprContextSetParameterByKey1f(state.context, RPR_CONTEXT_TEXTURE_GAMMA, 1.f))
+  CHECK(rprContextSetParameterByKey1f(state.context, RPR_CONTEXT_DISPLAY_GAMMA, 1.f))
+  // rough reflections do not lose the energy of the multiple scattering between the microfacets
+  CHECK(rprContextSetParameterByKey1u(state.context, RPR_CONTEXT_REFLECTION_ENERGY_COMPENSATION_ENABLED, 1))
+
+  CHECK(rprContextCreateMaterialSystem(state.context, 0, &state.matsys))
+  if (!state.matsys)
   {
-    o->commit();
-    o->markUpdated();
-    o->refDec(RefType::INTERNAL);
+    rprObjectDelete(state.context);
+    state.context = nullptr;
+    return false;
+  }
+  return true;
+}
+
+void RPRDevice::initDevice()
+{
+  if (m_initialized)
+    return;
+
+  auto &state = *deviceState();
+
+  std::lock_guard<std::recursive_mutex> lock(state.rprMutex);
+  if (m_initialized)
+    return;
+  m_initialized = true;
+
+  reportMessage(ANARI_SEVERITY_DEBUG, "initializing rpr device (%p)", this);
+
+  state.anariDevice = (anari::Device)this_device();
+
+  // environment variables override the parameters of the device
+  std::string computeDevice = m_compute_device;
+  if (const char *env = std::getenv("ANARI_RPR_COMPUTE_DEVICE"))
+    computeDevice = env;
+  std::string kernelsPath = m_kernels_path;
+  if (const char *env = std::getenv("ANARI_RPR_KERNELS_PATH"))
+    kernelsPath = env;
+  if (kernelsPath.empty())
+    kernelsPath = deviceLibraryDirectory() + "hipbin";
+  std::string cachePath = m_cache_path;
+  if (const char *env = std::getenv("ANARI_RPR_CACHE_PATH"))
+    cachePath = env;
+  cachePath = cacheDirectory(cachePath);
+
+  const rpr_creation_flags gpuFlag = RPRGpuFlags[std::clamp(m_gpu_index, 0, 15)];
+  rpr_creation_flags       flags   = gpuFlag;
+  if (computeDevice == "cpu")
+    flags = RPR_CREATION_FLAGS_ENABLE_CPU;
+  else if (computeDevice == "gpu+cpu" || computeDevice == "cpu+gpu")
+    flags = gpuFlag | RPR_CREATION_FLAGS_ENABLE_CPU;
+  else if (computeDevice == "opencl")
+    flags = gpuFlag | RPR_CREATION_FLAGS_ENABLE_OPENCL;
+  else if (computeDevice != "gpu")
+    reportMessage(ANARI_SEVERITY_WARNING, "unknown compute device '%s', using 'gpu'", computeDevice.c_str());
+
+  const bool wantsGPU   = (flags & gpuFlag) != 0;
+  bool       hasContext = false;
+
+  if (wantsGPU && !(flags & RPR_CREATION_FLAGS_ENABLE_OPENCL))
+  {
+    // The default GPU backend of Northstar is HIP with precompiled kernels. It needs the HIP runtime of
+    // the AMD driver or, for NVIDIA GPUs, the runtime of the CUDA version Northstar was built with.
+    bool hasRuntime = true;
+#ifdef _WIN32
+    static const char *runtimes[] = {
+        "cudart64_13.dll", "amdhip64_8.dll", "amdhip64_7.dll", "amdhip64_6.dll", "amdhip64.dll"};
+    hasRuntime = false;
+    for (const char *runtime : runtimes)
+    {
+      if (loadRuntimeLibrary(runtime))
+      {
+        reportMessage(ANARI_SEVERITY_DEBUG, "found GPU runtime library '%s'", runtime);
+        hasRuntime = true;
+        break;
+      }
+    }
+    if (!hasRuntime)
+    {
+      reportMessage(ANARI_SEVERITY_WARNING,
+          "neither the CUDA runtime 'cudart64_13.dll' nor the HIP runtime 'amdhip64*.dll' was found, which "
+          "the HIP/CUDA backend of RadeonProRender needs: copy the library next to the device library");
+    }
+#endif
+    hasContext = hasRuntime && createContext(flags, kernelsPath, cachePath);
+  } else
+  {
+    hasContext = createContext(flags, kernelsPath, cachePath);
   }
 
-  m_objectsToCommit.clear();
+  // The OpenCL backend is not used as fallback: it compiles its kernels when the first frame is
+  // rendered, which takes minutes and fails with some drivers. It has to be selected explicitly.
+  if (!hasContext && flags != RPR_CREATION_FLAGS_ENABLE_CPU)
+  {
+    reportMessage(ANARI_SEVERITY_WARNING, "GPU rendering is not available, falling back to CPU rendering");
+    flags = RPR_CREATION_FLAGS_ENABLE_CPU;
+    createContext(flags, kernelsPath, cachePath);
+  }
+
+  if (!state.context)
+  {
+    reportMessage(ANARI_SEVERITY_FATAL_ERROR, "failed to create RadeonProRender context");
+    return;
+  }
+
+  state.usesGPU = (flags & gpuFlag) != 0;
+
+  char name[1024] = {0};
+  if (state.usesGPU)
+  {
+    static const rpr_context_info gpuNames[] = {RPR_CONTEXT_GPU0_NAME, RPR_CONTEXT_GPU1_NAME,
+        RPR_CONTEXT_GPU2_NAME, RPR_CONTEXT_GPU3_NAME, RPR_CONTEXT_GPU4_NAME, RPR_CONTEXT_GPU5_NAME,
+        RPR_CONTEXT_GPU6_NAME, RPR_CONTEXT_GPU7_NAME, RPR_CONTEXT_GPU8_NAME, RPR_CONTEXT_GPU9_NAME,
+        RPR_CONTEXT_GPU10_NAME, RPR_CONTEXT_GPU11_NAME, RPR_CONTEXT_GPU12_NAME, RPR_CONTEXT_GPU13_NAME,
+        RPR_CONTEXT_GPU14_NAME, RPR_CONTEXT_GPU15_NAME};
+    rprContextGetInfo(state.context, gpuNames[std::clamp(m_gpu_index, 0, 15)], sizeof(name), name, nullptr);
+    state.computeDeviceName = name;
+  }
+  if (flags & RPR_CREATION_FLAGS_ENABLE_CPU)
+  {
+    name[0] = 0;
+    rprContextGetInfo(state.context, RPR_CONTEXT_CPU_NAME, sizeof(name), name, nullptr);
+    if (!state.computeDeviceName.empty())
+      state.computeDeviceName += " + ";
+    state.computeDeviceName += name;
+  }
+  reportMessage(ANARI_SEVERITY_INFO,
+      "RadeonProRender %d.%d.%d (Northstar) renders on %s%s (kernels: %s, cache: %s)", RPR_VERSION_MAJOR,
+      RPR_VERSION_MINOR, RPR_VERSION_REVISION, state.computeDeviceName.c_str(),
+      !state.usesGPU ? "" : (flags & RPR_CREATION_FLAGS_ENABLE_OPENCL) ? " with OpenCL" : " with HIP/CUDA",
+      kernelsPath.c_str(), cachePath.c_str());
+}
+
+void RPRDevice::deviceCommitParameters()
+{
+  helium::BaseDevice::deviceCommitParameters();
+
+  m_compute_device = getParamString("computeDevice", "gpu");
+  m_gpu_index      = getParam<int>("gpuIndex", 0);
+  m_kernels_path   = getParamString("kernelsPath", "");
+  m_cache_path     = getParamString("cachePath", "");
+
+  // parameters of older versions of the device: index 0 is the CPU, the GPUs start with index 1
+  uint32_t legacyDevice = 0;
+  if (getParam("RPRDevice", ANARI_UINT32, &legacyDevice))
+  {
+    m_compute_device = legacyDevice == 0 ? "cpu" : "gpu";
+    m_gpu_index      = legacyDevice == 0 ? 0 : int(legacyDevice) - 1;
+  }
+
+  if (m_initialized)
+  {
+    reportMessage(ANARI_SEVERITY_INFO,
+        "the compute device can not be changed after the first object of the device was created");
+  }
+}
+
+#define RPR_STRINGIFY(s) RPR_STRINGIFY2(s)
+#define RPR_STRINGIFY2(s) #s
+#define RPR_ANARI_VERSION_STRING                                                                             \
+  "rpr " RPR_STRINGIFY(RPR_ANARI_VERSION_MAJOR) "." RPR_STRINGIFY(RPR_ANARI_VERSION_MINOR) "." RPR_STRINGIFY(  \
+      RPR_ANARI_VERSION_PATCH)
+
+int RPRDevice::deviceGetProperty(const char *name, ANARIDataType type, void *mem, uint64_t size, uint32_t mask)
+{
+  static const std::string version_name = RPR_ANARI_VERSION_STRING;
+  std::string_view         prop         = name;
+  if (prop == "extension" && type == ANARI_STRING_LIST)
+  {
+    helium::writeToVoidP(mem, anari_rpr::query_extensions());
+    return 1;
+  } else if (prop == "version" && type == ANARI_INT32)
+  {
+    int version = RPR_ANARI_VERSION_MAJOR * 10000 + RPR_ANARI_VERSION_MINOR * 100 + RPR_ANARI_VERSION_PATCH;
+    helium::writeToVoidP(mem, version);
+    return 1;
+  } else if (prop == "version.major" && type == ANARI_INT32)
+  {
+    helium::writeToVoidP(mem, int(RPR_ANARI_VERSION_MAJOR));
+    return 1;
+  } else if (prop == "version.minor" && type == ANARI_INT32)
+  {
+    helium::writeToVoidP(mem, int(RPR_ANARI_VERSION_MINOR));
+    return 1;
+  } else if (prop == "version.patch" && type == ANARI_INT32)
+  {
+    helium::writeToVoidP(mem, int(RPR_ANARI_VERSION_PATCH));
+    return 1;
+  } else if (prop == "version.name.size" && type == ANARI_UINT64)
+  {
+    helium::writeToVoidP(mem, uint64_t(version_name.size() + 1));
+    return 1;
+  } else if (prop == "version.name" && type == ANARI_STRING)
+  {
+    std::memset(mem, 0, size);
+    std::memcpy(mem, version_name.data(), std::min(uint64_t(version_name.size()), size - 1));
+    return 1;
+  } else if (prop == "anariVersion.major" && type == ANARI_INT32)
+  {
+    helium::writeToVoidP(mem, 1);
+    return 1;
+  } else if (prop == "anariVersion.minor" && type == ANARI_INT32)
+  {
+    helium::writeToVoidP(mem, 0);
+    return 1;
+  } else if (prop == "geometryMaxIndex" && type == ANARI_UINT64)
+  {
+    helium::writeToVoidP(mem, uint64_t(std::numeric_limits<rpr_int>::max()));
+    return 1;
+  }
+  return 0;
+}
+
+RPRGlobalState *RPRDevice::deviceState() const
+{
+  return (RPRGlobalState *)helium::BaseDevice::m_state.get();
 }
 
 } // namespace anari::rpr
-
-static char deviceName[] = "rpr";
-
-extern "C" RPR_DEVICE_INTERFACE ANARI_DEFINE_LIBRARY_NEW_DEVICE(rpr, subtype)
-{
-  return (ANARIDevice) new anari::rpr::RPRDevice();
-}
-
-extern "C" RPR_DEVICE_INTERFACE ANARI_DEFINE_LIBRARY_INIT(rpr)
-{
-  printf("...loaded rpr library!\n");
-}
-
-extern "C" RPR_DEVICE_INTERFACE ANARI_DEFINE_LIBRARY_GET_DEVICE_SUBTYPES(rpr, libdata)
-{
-  static const char *devices[] = {deviceName, nullptr};
-  return devices;
-}
-
-extern "C" RPR_DEVICE_INTERFACE ANARI_DEFINE_LIBRARY_GET_OBJECT_SUBTYPES(
-    rpr, libdata, deviceSubtype, objectType)
-{
-  // TODO
-  return nullptr;
-}
-
-extern "C" RPR_DEVICE_INTERFACE ANARI_DEFINE_LIBRARY_GET_OBJECT_PARAMETERS(
-    rpr, libdata, deviceSubtype, objectSubtype, objectType)
-{
-  // TODO
-  return nullptr;
-}
-extern "C" RPR_DEVICE_INTERFACE ANARI_DEFINE_LIBRARY_GET_PARAMETER_PROPERTY(rpr, libdata, deviceSubtype,
-    objectSubtype, objectType, parameterName, parameterType, propertyName, propertyType)
-{
-  // TODO
-  return nullptr;
-}
-
-extern "C" RPR_DEVICE_INTERFACE ANARIDevice anariNewRPRDevice()
-{
-  return (ANARIDevice) new anari::rpr::RPRDevice();
-}

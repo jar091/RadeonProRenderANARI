@@ -15,39 +15,18 @@ limitations under the License.
 
 namespace anari::rpr {
 
-TransformSampler::TransformSampler(rpr_context context, rpr_material_system matsys) : Sampler(context, matsys){}
+TransformSampler::TransformSampler(RPRGlobalState *s) : Sampler(s) {}
 
-void TransformSampler::commit()
+void TransformSampler::commitParameters()
 {
-  clearNodes();
-  m_transform       = getParam<mat4x4>("transform", mat4(1));
-  m_input_attribute = getParam<std::string>("inAttribute", "attribute0");
+  Sampler::commitParameters();
+  // KHR_SAMPLER_TRANSFORM names the matrix 'outTransform', older applications use 'transform'
+  m_output_transform = getParam<mat4>("outTransform", getParam<mat4>("transform", mat4(linalg::identity)));
 }
 
-rpr_material_node TransformSampler::generateMaterial(Geometry *geometry)
+MaterialValue TransformSampler::generateMaterial(MaterialGraph &graph) const
 {
-  if (!geometry->hasAttribute(m_input_attribute.c_str()))
-  {
-    throw std::runtime_error("attribute is not supported by geometry");
-  }
-  auto *node = new TransformNode(
-      m_matsys, m_transform, geometry->getAttribute(m_input_attribute.c_str())->getMaterial());
-  m_transform_nodes.push_back(node);
-  return node->getMaterial();
-}
-
-void TransformSampler::clearNodes()
-{
-  for (TransformNode *node : m_transform_nodes)
-  {
-    delete node;
-  }
-  m_transform_nodes.clear();
-}
-
-TransformSampler::~TransformSampler()
-{
-  clearNodes();
+  return applyTransform(graph, m_output_transform, m_output_offset, graph.attribute(m_input_attribute));
 }
 
 } // namespace anari::rpr

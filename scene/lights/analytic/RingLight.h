@@ -17,20 +17,20 @@ limitations under the License.
 
 namespace anari::rpr {
 
+// The ring light is approximated by a RPR disk light, 'innerRadius' is not supported
 struct RingLight : public AnalyticLight
 {
- public:
-  explicit RingLight(rpr_context context);
-  void commit() override;
-  void getInstances(std::vector<void *> &outInstances, mat4 transform) override;
+  explicit RingLight(RPRGlobalState *s);
+  void commitParameters() override;
+  void attachToScene(rpr_scene scene, const mat4 &transform, SceneItems &items) override;
 
  private:
-  vec3    m_position{};
-  vec3    m_direction{};
-  float32 m_outerAngle{};
-  float32 m_innerAngle{};
-  float32 m_power{};
-  float32 m_radius{};
+  float3 m_position{0.f};
+  float3 m_direction{0.f, 0.f, -1.f};
+  float  m_openingAngle{pi};
+  float  m_falloffAngle{0.1f};
+  float  m_radius{0.f};
+  float  m_intensity{1.f}; // W/sr in the center of the cone
 };
 
 } // namespace anari::rpr
