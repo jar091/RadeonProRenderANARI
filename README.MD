@@ -23,16 +23,35 @@ The Linux and macOS builds and AMD GPUs (HIP) are not tested.
 * other channels (normal, albedo, ids) are not supported
 ### Renderer
 * subtype `default`: `background` (color or image), `ambientRadiance`, `ambientColor`, `pixelSamples`, `maxRayDepth`, `radianceClamp`
+* path depth, counted like in Cycles (the limits of RadeonProRender are these values plus one, measured with Northstar 3.1.7):
+  * `maxBounce`: bounces of a path after the point which the camera sees, 0 is direct light only (`RPR_CONTEXT_MAX_RECURSION`). It takes precedence over `maxRayDepth`, which is the value of RadeonProRender as it is (`maxRayDepth` 8 = `maxBounce` 7). A surface with transparency which a path passes counts as a bounce; there is no separate limit for transparency, and shadow rays pass any number of transparent surfaces
+  * `maxDiffuseBounce`: diffuse bounces (`RPR_CONTEXT_MAX_DEPTH_DIFFUSE`), default: the limit of all bounces
+  * limits for glossy, transmission and volume bounces are not available: Northstar ignores `RPR_CONTEXT_MAX_DEPTH_GLOSSY`, `_REFRACTION`, `_GLOSSY_REFRACTION` and `_SHADOW` and has no limit for volumes
+* `clampIndirect` (`RPR_CONTEXT_RADIANCE_CLAMP`, 0: no clamp) limits every color channel of the light which a path collects after its first bounce; it takes precedence over `radianceClamp`, which is the same value. Direct light and directly visible emission are never clamped (there is no counterpart of the direct clamp of Cycles)
+* a change of these parameters restarts the accumulation, the scene is not built again
 ### Camera
 * supported types: `perspective` (with depth of field) and `orthographic`
-* `imageRegion` is not supported
+* `imageRegion` selects the part of the image plane which the frame shows (lens shift, crop, zoom). The perspective camera uses a smaller sensor with the same focal length and the lens shift of RadeonProRender, so direction, perspective and depth of field stay the same; the orthographic camera is resized and moved in its image plane
 ### Geometry
 * `triangle` and `quad` are RadeonProRender meshes
 * `sphere` is rendered with instances of one sphere mesh
 * `cylinder`, `cone` and `curve` are tessellated
 * `isosurface` is extracted from `structuredRegular` fields
+### Instances
+* `transform` instances, also with an array of transformations (`ANARI_KHR_INSTANCE_TRANSFORM_ARRAY`)
+* ray visibility of the surfaces of an instance: the `BOOL` parameters `visibility.camera`, `visibility.diffuse`, `visibility.glossy`, `visibility.transmission`, `visibility.volumeScatter` and `visibility.shadow` (default: true) hide them from camera rays, from rays reflected by diffuse lobes (an emissive surface then casts no light on diffuse surfaces), from specular and glossy reflections, from refracted rays and from shadow rays. They are the visibility flags of RadeonProRender shapes; `visibility.volumeScatter` has no counterpart and only matters when all six are false: then the instance, including its lights and volumes, is not part of the scene. Behind a surface which is transparent without refraction (opacity, or transmission with an index of refraction of 1) the camera flag decides, behind a refracting surface the transmission flag. Lights and volumes of an instance are not affected by single flags
+* the RadeonProRender instances of a scene are kept when the scene is updated: a change of a transformation, a material or a visibility flag does not build the meshes again
 ### Materials and samplers
 * `matte` and `physicallyBased` use the RadeonProRender uber material; every parameter can be a constant, an attribute or a sampler
+* `materialx` is a MaterialX document which is loaded by the MaterialX loader of RadeonProRender:
+  * `source` is the XML text of the document (`sourceType` = `documentInline`, the default) or the path of a `.mtlx` file (`documentFile`); `materialName` selects one `surfacematerial` of an inline document (default: the first one)
+  * the images are `image2D` sampler parameters of the material: a parameter with the name of a file of the document (the value of a `filename` input, for example `image1/file`) provides the image of that file; only the image of the sampler is used. The color space attributes of the document are ignored: an image is linear unless its array has an sRGB element type
+  * the node definitions of `open_pbr_surface`, `standard_surface` and `UsdPreviewSurface` are compiled into the device (`material/materialx`); they are adapted to the loader, see the comments in the files. Nodes of the standard library which the loader does not know (for example `checkerboard`, `randomfloat`, `blackbody`) are an error
+  * an inline document is rewritten before it is loaded, because the loader renders some valid constructs wrong without a message (`material/MaterialXDocument.h`): inputs which are connected through document-level `output` elements, `separate2/3/4` nodes, `mix` and `add` of EDFs, the roughness of BSDF nodes which does not come from a `roughness_anisotropy` node and the `opacity` of `surface` nodes. Only nodes at document level are rewritten, not the content of node graphs
+  * `texcoord` nodes read `attribute0` (index 0) to `attribute3` (index 3), `geomcolor` reads `color`; `geompropvalue` nodes can read `attribute0`..`attribute3` and `color` by name. Only attributes which are defined per vertex or per primitive are available
+  * opacity (`geometry_opacity` of `open_pbr_surface`, `opacity` of `standard_surface`, `UsdPreviewSurface` and of `surface` nodes) is rendered as transmission without refraction, the alpha channel of the frame stays opaque; `alphaMode` and `alphaCutoff` are ignored
+  * a document which cannot be loaded is reported as an error and rendered with a gray diffuse material; the property `valid` of the material is false then
+  * the document is loaded again only when `source`, `sourceType`, `materialName` or one of its images changes (about 5-10 ms per document)
 * samplers: `image1D`, `image2D`, `image3D` (emulated with a 2D atlas) and `transform`
 * the `primitive` sampler, `clampToBorder`, `thickness`, attenuation, iridescence and `clearcoatNormal` are not supported
 ### Lights

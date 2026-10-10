@@ -100,7 +100,114 @@
           "tags": [],
           "default": 0.0,
           "minimum": 0.0,
-          "description": "clamp the radiance of indirect samples to reduce fireflies (0 disables clamping)"
+          "description": "clamp the radiance of indirect samples to reduce fireflies (0 disables clamping), used when clampIndirect is not set"
+        },
+        {
+          "name": "maxBounce",
+          "types": ["ANARI_INT32"],
+          "tags": [],
+          "default": 7,
+          "minimum": 0,
+          "maximum": 49,
+          "description": "maximum number of bounces of a path after the point which the camera sees (0: direct light only), takes precedence over maxRayDepth. A surface with transparency which a path passes counts as a bounce"
+        },
+        {
+          "name": "maxDiffuseBounce",
+          "types": ["ANARI_INT32"],
+          "tags": [],
+          "default": 7,
+          "minimum": 0,
+          "maximum": 49,
+          "description": "maximum number of diffuse bounces of a path (0: diffuse surfaces get direct light only), default: the limit of all bounces"
+        },
+        {
+          "name": "clampIndirect",
+          "types": ["ANARI_FLOAT32"],
+          "tags": [],
+          "default": 0.0,
+          "minimum": 0.0,
+          "description": "limit for every color channel of the light which a path collects after its first bounce (0: no limit), takes precedence over radianceClamp. Direct light is never clamped"
+        }
+      ]
+    },
+    {
+      "type": "ANARI_INSTANCE",
+      "name": "transform",
+      "parameters": [
+        {
+          "name": "visibility.camera",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": true,
+          "description": "the surfaces of the instance are seen by camera rays"
+        },
+        {
+          "name": "visibility.diffuse",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": true,
+          "description": "the surfaces of the instance are seen by rays which were reflected diffusely (an emissive surface lights diffuse surfaces)"
+        },
+        {
+          "name": "visibility.glossy",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": true,
+          "description": "the surfaces of the instance are seen in specular and glossy reflections"
+        },
+        {
+          "name": "visibility.transmission",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": true,
+          "description": "the surfaces of the instance are seen by refracted rays"
+        },
+        {
+          "name": "visibility.volumeScatter",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": true,
+          "description": "the surfaces of the instance are seen by rays which were scattered by a volume (RadeonProRender has no such flag: the parameter only matters when all visibility parameters are false)"
+        },
+        {
+          "name": "visibility.shadow",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": true,
+          "description": "the surfaces of the instance cast shadows"
+        }
+      ]
+    },
+    {
+      "type": "ANARI_MATERIAL",
+      "name": "materialx",
+      "description": "material defined by a MaterialX document. Every image of the document is an image2D sampler parameter with the name of the file of the image (the value of the 'filename' input)",
+      "parameters": [
+        {
+          "name": "name",
+          "types": ["ANARI_STRING"],
+          "tags": [],
+          "description": "optional object name"
+        },
+        {
+          "name": "source",
+          "types": ["ANARI_STRING"],
+          "tags": ["required"],
+          "description": "MaterialX document: the XML text when sourceType is documentInline, the path of a .mtlx file when sourceType is documentFile"
+        },
+        {
+          "name": "sourceType",
+          "types": ["ANARI_STRING"],
+          "tags": [],
+          "default": "documentInline",
+          "values": ["documentInline", "documentFile"],
+          "description": "how source is interpreted"
+        },
+        {
+          "name": "materialName",
+          "types": ["ANARI_STRING"],
+          "tags": [],
+          "description": "name of the surfacematerial of an inline document to use (default: the first one)"
         }
       ]
     }

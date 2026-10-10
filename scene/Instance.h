@@ -41,6 +41,7 @@ struct Instance : public SceneObject
   mat4                               m_transform{linalg::identity};
   helium::ChangeObserverPtr<Array1D> m_transform_array; // KHR_INSTANCE_TRANSFORM_ARRAY
   UniformAttributeSet                m_uniform_attributes;
+  RayVisibility                      m_visibility;
 };
 } // namespace rpr
 

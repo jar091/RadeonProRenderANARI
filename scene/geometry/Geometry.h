@@ -37,6 +37,17 @@ struct Geometry : public SceneObject
   // attribute is stored per vertex as primvar of the base shape, the key is the attribute slot
   bool hasAttribute(int slot) const;
 
+  // Has to be called after instances of the base shape were added to a scene, 'build' identifies the
+  // update of the scene. 'primvarsNeeded': one of the instances is new or got another material, and its
+  // material reads primvars.
+  // Northstar provides the primvars of a mesh only to the instances and materials which exist when the
+  // mesh is rendered for the first time: a material which reads them gets zeros or constant values if it
+  // is assigned later or belongs to an instance which is created later. Setting one of the primvars
+  // again restores all of them, but Northstar builds the mesh again then. That is why the instances of
+  // a scene are kept as long as possible (see SceneItems) and the primvars are only set again when it
+  // is needed.
+  void instancesAttached(helium::TimeStamp build, bool primvarsNeeded) const;
+
   // Geometries of many equal primitives (spheres) are not one big mesh: the base shape is a single
   // primitive and the geometry is a set of instances of it. This is much faster to build for RPR and
   // needs less memory.
@@ -61,6 +72,11 @@ struct Geometry : public SceneObject
 
   rpr_shape                        m_base_shape{};
   std::array<bool, NUM_ATTRIBUTES> m_has_attribute{};
+  // copy of the values of one primvar of the base shape, see instancesAttached()
+  int                       m_refresh_slot{-1};
+  std::vector<float4>       m_refresh_values;
+  mutable helium::TimeStamp m_first_instances_build{0};
+  mutable helium::TimeStamp m_last_refresh_build{0};
 
   std::vector<mat4>                      m_instance_transforms;
   std::array<rpr_buffer, NUM_ATTRIBUTES> m_attribute_buffers{};

@@ -184,6 +184,11 @@ void Geometry::setMesh(const MeshView &mesh)
     CHECK(rprShapeSetPrimvar(m_base_shape, rpr_uint(slot), (const rpr_float *)mesh.attributes[slot],
         rpr_uint(mesh.num_vertices * 4), 4, RPR_PRIMVAR_INTERPOLATION_VERTEX))
     m_has_attribute[slot] = true;
+    if (m_refresh_slot < 0)
+    {
+      m_refresh_slot = slot;
+      m_refresh_values.assign(mesh.attributes[slot], mesh.attributes[slot] + mesh.num_vertices);
+    }
   }
 
   for (size_t i = 0; i < mesh.num_vertices; i++)
@@ -194,11 +199,30 @@ void Geometry::setMesh(const MeshView &mesh)
       mesh.num_vertices, mesh.num_faces, std::chrono::duration<float>(end - start).count());
 }
 
+void Geometry::instancesAttached(helium::TimeStamp build, bool primvarsNeeded) const
+{
+  // nothing to do for the scene in which the mesh is rendered for the first time
+  if (m_first_instances_build == 0)
+    m_first_instances_build = build;
+  if (!primvarsNeeded || m_first_instances_build == build || m_last_refresh_build == build)
+    return;
+  m_last_refresh_build = build;
+  if (!m_base_shape || m_refresh_slot < 0 || m_refresh_values.empty())
+    return;
+  CHECK(rprShapeSetPrimvar(m_base_shape, rpr_uint(m_refresh_slot), (const rpr_float *)m_refresh_values.data(),
+      rpr_uint(m_refresh_values.size() * 4), 4, RPR_PRIMVAR_INTERPOLATION_VERTEX))
+}
+
 void Geometry::clearMesh()
 {
   deviceState()->deleteLater(m_base_shape, DeleteOrder::SHAPE);
   m_base_shape = nullptr;
   m_has_attribute.fill(false);
+  m_refresh_slot = -1;
+  m_refresh_values.clear();
+  m_refresh_values.shrink_to_fit();
+  m_first_instances_build = 0;
+  m_last_refresh_build    = 0;
   resetBounds();
 
   for (rpr_buffer &buffer : m_attribute_buffers)

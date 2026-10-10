@@ -12,6 +12,7 @@ limitations under the License.
 ********************************************************************/
 
 #include "Material.h"
+#include "MaterialXMaterial.h"
 #include "MatteMaterial.h"
 #include "PhysicallyBasedMaterial.h"
 
@@ -100,6 +101,10 @@ Material *Material::createInstance(std::string_view type, RPRGlobalState *s)
   {
     return new PhysicallyBasedMaterial(s);
   }
+  if (type == "materialx")
+  {
+    return new MaterialXMaterial(s);
+  }
   return (Material *)new UnknownObject(ANARI_MATERIAL, type, s);
 }
 
@@ -121,12 +126,12 @@ void Material::markFinalized()
   markSceneChanged();
 }
 
-rpr_material_node Material::getMaterial(const AttributeContext &context)
+const MaterialGraph &Material::getMaterial(const AttributeContext &context)
 {
   auto &graph = m_graphs[context];
   if (!graph)
     graph = createMaterial(context);
-  return graph->root;
+  return *graph;
 }
 
 std::unique_ptr<MaterialGraph> Material::createMaterial(const AttributeContext &context) const

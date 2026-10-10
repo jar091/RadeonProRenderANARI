@@ -23,10 +23,12 @@ struct Orthographic : public Camera
   explicit Orthographic(RPRGlobalState *s);
   void  commitParameters() override;
   void  finalize() override;
+  void  attachToScene(rpr_scene scene, const uint2 &frameSize) override;
   float depth(const float3 &point) const override;
 
  private:
   float m_height{1.f};
+  uint2 m_frame_size{0u}; // size of the frame for which the position of the RPR camera was set
 };
 
 } // namespace anari::rpr

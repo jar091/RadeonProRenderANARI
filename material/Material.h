@@ -53,9 +53,9 @@ struct Material : public Object
   void finalize() override;
   void markFinalized() override;
 
-  // Returns the root node of the material for shapes with the given attributes. The nodes are owned
-  // by the material, they are valid until the material is finalized again.
-  rpr_material_node getMaterial(const AttributeContext &context);
+  // Returns the nodes of the material for shapes with the given attributes. They are owned by the
+  // material, they are valid until the material is finalized again.
+  const MaterialGraph &getMaterial(const AttributeContext &context);
 
   // Creates the nodes of the material for shapes with the given attributes, they are owned by the caller.
   std::unique_ptr<MaterialGraph> createMaterial(const AttributeContext &context) const;

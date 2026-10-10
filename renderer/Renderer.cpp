@@ -40,14 +40,22 @@ void Renderer::commitParameters()
     m_background_color = float4(color, 1.f);
   m_background_image = getArray2D(this, "background");
 
-  m_ambient_radiance = getParam<float>("ambientRadiance", 0.f);
-  m_ambient_color    = getParam<float3>("ambientColor", float3(1.f));
+  const float3 previousAmbient = ambientRadiance();
+  m_ambient_radiance           = getParam<float>("ambientRadiance", 0.f);
+  m_ambient_color              = getParam<float3>("ambientColor", float3(1.f));
+  if (m_ambient_changed == 0 || ambientRadiance() != previousAmbient)
+    m_ambient_changed = helium::newTimeStamp();
   m_pixel_samples    = std::max(getParam<int>("pixelSamples", 1), 1);
 }
 
 void Renderer::attachToContext() const
 {
   CHECK(rprContextSetParameterByKey1u(deviceState()->context, RPR_CONTEXT_ITERATIONS, rpr_uint(m_pixel_samples)))
+}
+
+helium::TimeStamp Renderer::ambientChanged() const
+{
+  return m_ambient_changed;
 }
 
 float3 Renderer::ambientRadiance() const

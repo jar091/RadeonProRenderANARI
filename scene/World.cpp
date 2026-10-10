@@ -75,7 +75,7 @@ rpr_scene World::update(const Renderer &renderer)
     m_last_scene_update = helium::newTimeStamp();
   }
 
-  if (sceneChanged || &renderer != m_last_renderer || renderer.lastUpdated() >= m_last_environment_update)
+  if (sceneChanged || &renderer != m_last_renderer || renderer.ambientChanged() >= m_last_environment_update)
   {
     rebuildEnvironment(renderer);
     m_last_renderer           = &renderer;
@@ -92,12 +92,24 @@ bool World::hasVisibleEnvironment() const
 
 void World::rebuildScene()
 {
+  auto *state = deviceState();
+
+  // The instances of the surfaces and the base shapes of the previous scene stay in the scene: the ones
+  // which are still needed are used again. Everything else is created again.
+  std::vector<SurfaceInstance> previousInstances;
+  previousInstances.swap(m_items.instances);
+  std::set<rpr_shape> previousBaseShapes;
+  previousBaseShapes.swap(m_items.base_shapes);
   clearItems();
+  for (const SurfaceInstance &instance : previousInstances)
+    m_items.pool.emplace(instance.base, instance);
+  m_items.previous_base_shapes.swap(previousBaseShapes);
+  m_items.build = helium::newTimeStamp();
   m_environment_lights.clear();
 
   // surfaces, volumes and lights of the world itself
   m_content.attachToScene(
-      m_scene, mat4(linalg::identity), UniformAttributeSet(), m_items, m_environment_lights);
+      m_scene, mat4(linalg::identity), UniformAttributeSet(), RayVisibility(), m_items, m_environment_lights);
 
   if (m_instance_data)
   {
@@ -108,13 +120,40 @@ void World::rebuildScene()
     }
   }
 
-  reportMessage(ANARI_SEVERITY_DEBUG, "RPR scene rebuilt with %zu shapes and %zu lights", m_items.shapes.size(),
-      m_items.lights.size());
+  // what is left of the previous scene
+  const size_t numReused = previousInstances.size() - m_items.pool.size();
+  for (const auto &unused : m_items.pool)
+  {
+    CHECK(rprSceneDetachShape(m_scene, unused.second.instance))
+    state->deleteLater(unused.second.instance, DeleteOrder::SCENE_ITEM);
+  }
+  m_items.pool.clear();
+  for (rpr_shape shape : m_items.previous_base_shapes)
+  {
+    if (m_items.base_shapes.count(shape) == 0)
+    {
+      CHECK(rprSceneDetachShape(m_scene, shape))
+    }
+  }
+  m_items.previous_base_shapes.clear();
+
+  reportMessage(ANARI_SEVERITY_DEBUG,
+      "RPR scene rebuilt with %zu instances of surfaces (%zu of the previous scene), %zu other shapes and %zu lights",
+      m_items.instances.size(), numReused, m_items.shapes.size(), m_items.lights.size());
 }
 
 void World::clearItems()
 {
   auto *state = deviceState();
+  for (const SurfaceInstance &instance : m_items.instances)
+  {
+    if (m_scene)
+    {
+      CHECK(rprSceneDetachShape(m_scene, instance.instance))
+    }
+    state->deleteLater(instance.instance, DeleteOrder::SCENE_ITEM);
+  }
+  m_items.instances.clear();
   for (rpr_shape shape : m_items.shapes)
   {
     if (m_scene)

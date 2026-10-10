@@ -15,24 +15,47 @@ limitations under the License.
 
 #include "../../material/Material.h"
 #include "../../rpr_common.h"
+#include "../RayVisibility.h"
 #include "../SceneObject.h"
 #include "Geometry.h"
 // std
 #include <memory>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 namespace anari {
 namespace rpr {
 
+// RPR instance of the base shape of a geometry
+struct SurfaceInstance
+{
+  rpr_shape     base{nullptr};
+  rpr_shape     instance{nullptr};
+  RayVisibility visibility; // the flags which the instance has
+  helium::TimeStamp material{0}; // MaterialGraph::id of its material
+};
+
 // RPR objects which are part of a scene. They are created when the scene of a world is updated.
 struct SceneItems
 {
+  // The instances of the surfaces. The instances of the previous scene are used again (see 'pool'):
+  // creating the instances of a big scene takes time and the primvars of a mesh have to be set again
+  // for instances which are created after it was rendered (see Geometry::instancesAttached()).
+  std::vector<SurfaceInstance> instances;
+  // the instances of the previous scene which are not used yet, by base shape. They are still attached
+  // to the scene.
+  std::unordered_multimap<rpr_shape, SurfaceInstance> pool;
+  // identifies the update of the scene which is in progress
+  helium::TimeStamp build{0};
+
+  // all other shapes (area lights, volumes), they are created again with every update
   std::vector<rpr_shape> shapes;
   std::vector<rpr_light> lights;
   // Base shapes of the geometries. They are owned by the geometries, but they have to be part of the
   // scene as long as their instances are.
   std::set<rpr_shape> base_shapes;
+  std::set<rpr_shape> previous_base_shapes; // the ones of the previous scene, still attached to the scene
   // material nodes which are used by the shapes of this scene only
   std::vector<std::unique_ptr<MaterialGraph>> graphs;
 };
@@ -46,9 +69,10 @@ struct Surface : public SceneObject
   bool isValid() const override;
   box3 bounds() const override;
 
-  // creates an instance of the geometry with the material of the surface and attaches it to the scene
-  void attachToScene(
-      rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes, SceneItems &items);
+  // Adds an instance of the geometry with the material of the surface to the scene: an instance of the
+  // previous scene with the same geometry is used again, otherwise a new one is created.
+  void attachToScene(rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes,
+      const RayVisibility &visibility, SceneItems &items);
 
  private:
   helium::IntrusivePtr<Geometry> m_geometry;

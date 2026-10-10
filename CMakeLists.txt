@@ -112,6 +112,27 @@ if (WIN32)
     endif ()
 endif ()
 
+# The node definitions of the MaterialX surface shaders are compiled into the device: the MaterialX
+# loader of RPR needs them for every document and the device must not depend on files at runtime.
+set(RPR_MATERIALX_DEFINITIONS open_pbr_surface standard_surface usd_preview_surface)
+set(RPR_MATERIALX_ARRAYS "")
+set(RPR_MATERIALX_TABLE "")
+foreach (RPR_MATERIALX_NAME ${RPR_MATERIALX_DEFINITIONS})
+    set(RPR_MATERIALX_FILE "${CMAKE_CURRENT_SOURCE_DIR}/material/materialx/${RPR_MATERIALX_NAME}.mtlx")
+    # the source file is generated again when a definition changes
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RPR_MATERIALX_FILE}")
+    file(READ "${RPR_MATERIALX_FILE}" RPR_MATERIALX_HEX HEX)
+    # 16 bytes per line
+    string(REGEX REPLACE "(................................)" "\\1\n" RPR_MATERIALX_HEX "${RPR_MATERIALX_HEX}")
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," RPR_MATERIALX_HEX "${RPR_MATERIALX_HEX}")
+    string(APPEND RPR_MATERIALX_ARRAYS
+            "const unsigned char ${RPR_MATERIALX_NAME}[] = {\n${RPR_MATERIALX_HEX}\n};\n\n")
+    string(APPEND RPR_MATERIALX_TABLE
+            "    {\"${RPR_MATERIALX_NAME}\", (const char *)${RPR_MATERIALX_NAME}, sizeof(${RPR_MATERIALX_NAME})},\n")
+endforeach ()
+configure_file(material/MaterialXDefinitions.cpp.in
+        ${CMAKE_CURRENT_BINARY_DIR}/MaterialXDefinitions.cpp @ONLY)
+
 add_library(${PROJECT_NAME} SHARED
         Object.cpp
         RPRDevice.cpp
@@ -126,8 +147,11 @@ add_library(${PROJECT_NAME} SHARED
 
         material/Material.cpp
         material/MaterialGraph.cpp
+        material/MaterialXDocument.cpp
+        material/MaterialXMaterial.cpp
         material/MatteMaterial.cpp
         material/PhysicallyBasedMaterial.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/MaterialXDefinitions.cpp
 
         sampler/Sampler.cpp
         sampler/TransformSampler.cpp

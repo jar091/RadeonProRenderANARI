@@ -32,6 +32,9 @@ struct Image : public Sampler
 
   MaterialValue generateMaterial(MaterialGraph &graph) const override;
 
+  // the RPR image of the sampler, null if it is not valid. It is replaced when the sampler is finalized.
+  rpr_image image() const;
+
  protected:
   static rpr_image_wrap_type processWrap(const std::string &name);
 

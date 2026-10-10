@@ -146,6 +146,7 @@ MaterialValue MaterialGraph::attribute(Attribute attribute)
       return MaterialValue(sampler);
     }
     // the primvar key of an attribute is its slot
+    usesPrimvars           = true;
     rpr_material_node node = createNode(RPR_MATERIAL_NODE_PRIMVAR_LOOKUP);
     setInputU(node, RPR_MATERIAL_INPUT_VALUE, rpr_uint(slot));
     return MaterialValue(node);

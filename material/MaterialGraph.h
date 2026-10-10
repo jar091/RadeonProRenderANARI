@@ -14,6 +14,8 @@ limitations under the License.
 #pragma once
 
 #include "../scene/geometry/attributes/Attribute.h"
+// helium
+#include "helium/utility/TimeStamp.h"
 // std
 #include <vector>
 
@@ -67,6 +69,11 @@ struct MaterialGraph
 
   // the node which is assigned to the shapes
   rpr_material_node root{nullptr};
+  // The material reads attributes of the geometry which are primvars of its mesh.
+  bool usesPrimvars{false};
+  // Identifies the graph. The address of the root node does not: a new node can get the address of a
+  // node which was deleted.
+  const helium::TimeStamp id{helium::newTimeStamp()};
 
  private:
   RPRGlobalState                *m_state{nullptr};

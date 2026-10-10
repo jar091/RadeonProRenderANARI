@@ -190,6 +190,11 @@ bool Image::isValid() const
   return m_image != nullptr;
 }
 
+rpr_image Image::image() const
+{
+  return m_image;
+}
+
 void Image::setImage(const void *data, ANARIDataType elementType, size_t width, size_t height)
 {
   clearImage();

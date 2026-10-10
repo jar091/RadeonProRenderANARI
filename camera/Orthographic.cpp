@@ -38,8 +38,29 @@ void Orthographic::finalize()
   const float sensorHeight = 24.f;
   CHECK(rprCameraSetSensorSize(m_camera, sensorHeight * m_aspect, sensorHeight))
 
-  CHECK(rprCameraSetOrthoHeight(m_camera, m_height))
-  CHECK(rprCameraSetOrthoWidth(m_camera, m_height * m_aspect))
+  // the frame shows the image region of the plane with the size 'height * aspect' x 'height'
+  const float2 regionSize = this->regionSize();
+  CHECK(rprCameraSetOrthoHeight(m_camera, m_height * regionSize.y))
+  CHECK(rprCameraSetOrthoWidth(m_camera, m_height * m_aspect * regionSize.x))
+
+  // the position of the camera depends on the size of the frame, see attachToScene()
+  m_frame_size = uint2(0u);
+}
+
+void Orthographic::attachToScene(rpr_scene scene, const uint2 &frameSize)
+{
+  if (m_camera && frameSize != m_frame_size && frameSize.x > 0 && frameSize.y > 0)
+  {
+    m_frame_size = frameSize;
+    // The lens shift of RPR has no effect on orthographic cameras. The camera is moved in its image
+    // plane to the center of the image region instead, which is exact for parallel rays.
+    // In addition the image of an orthographic RPR camera is half a pixel off (measured: the center of
+    // the view is at the pixel position (width / 2 - 0.5, height / 2 - 0.5)), which is corrected here.
+    const float2 planeSize(m_height * m_aspect, m_height);
+    const float2 pixelSize = planeSize * regionSize() / float2(float(frameSize.x), float(frameSize.y));
+    setTransform((regionCenter() - float2(0.5f)) * planeSize + pixelSize * 0.5f);
+  }
+  Camera::attachToScene(scene, frameSize);
 }
 
 float Orthographic::depth(const float3 &point) const

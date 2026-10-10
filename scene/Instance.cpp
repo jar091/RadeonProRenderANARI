@@ -31,6 +31,13 @@ void Instance::commitParameters()
     if (getParam(attributeName(slot), ANARI_FLOAT32_VEC4, &value))
       m_uniform_attributes[slot] = value;
   }
+
+  m_visibility.camera        = getParam<bool>("visibility.camera", true);
+  m_visibility.diffuse       = getParam<bool>("visibility.diffuse", true);
+  m_visibility.glossy        = getParam<bool>("visibility.glossy", true);
+  m_visibility.transmission  = getParam<bool>("visibility.transmission", true);
+  m_visibility.volumeScatter = getParam<bool>("visibility.volumeScatter", true);
+  m_visibility.shadow        = getParam<bool>("visibility.shadow", true);
 }
 
 void Instance::finalize()
@@ -80,10 +87,11 @@ box3 Instance::bounds() const
 void Instance::attachToScene(
     rpr_scene scene, SceneItems &items, std::vector<EnvironmentLightInstance> &environmentLights) const
 {
-  if (!isValid())
+  // an instance which no ray sees contributes nothing to the scene, not even its lights
+  if (!isValid() || !m_visibility.any())
     return;
   forEachTransform([&](const mat4 &transform) {
-    m_group->content().attachToScene(scene, transform, m_uniform_attributes, items, environmentLights);
+    m_group->content().attachToScene(scene, transform, m_uniform_attributes, m_visibility, items, environmentLights);
   });
 }
 

@@ -62,8 +62,21 @@ box3 GroupContent::bounds() const
   return result;
 }
 
+void setRayVisibility(const RPRGlobalState *state, rpr_shape shape, const RayVisibility &visibility)
+{
+  auto deviceState = [&]() { return state; };
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_PRIMARY_ONLY_FLAG, visibility.camera))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_SHADOW, visibility.shadow))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_DIFFUSE, visibility.diffuse))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_REFLECTION, visibility.glossy))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_GLOSSY_REFLECTION, visibility.glossy))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_REFRACTION, visibility.transmission))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_GLOSSY_REFRACTION, visibility.transmission))
+  CHECK(rprShapeSetVisibilityFlag(shape, RPR_SHAPE_VISIBILITY_TRANSPARENT, visibility.transmission))
+}
+
 void GroupContent::attachToScene(rpr_scene scene, const mat4 &transform,
-    const UniformAttributeSet &instanceAttributes, SceneItems &items,
+    const UniformAttributeSet &instanceAttributes, const RayVisibility &visibility, SceneItems &items,
     std::vector<EnvironmentLightInstance> &environmentLights) const
 {
   forEachValidObject<Light>(m_light_data.get(), ANARI_LIGHT, [&](Light *light) {
@@ -72,8 +85,9 @@ void GroupContent::attachToScene(rpr_scene scene, const mat4 &transform,
     else
       light->attachToScene(scene, transform, items);
   });
-  forEachValidObject<Surface>(m_surface_data.get(), ANARI_SURFACE,
-      [&](Surface *surface) { surface->attachToScene(scene, transform, instanceAttributes, items); });
+  forEachValidObject<Surface>(m_surface_data.get(), ANARI_SURFACE, [&](Surface *surface) {
+    surface->attachToScene(scene, transform, instanceAttributes, visibility, items);
+  });
   forEachValidObject<Volume>(m_volume_data.get(), ANARI_VOLUME,
       [&](Volume *volume) { volume->attachToScene(scene, transform, items); });
 }

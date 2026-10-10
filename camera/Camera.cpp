@@ -59,11 +59,26 @@ void Camera::commitParameters()
     m_aspect = 1.f;
 
   box2 region(float2(0.f), float2(1.f));
-  if (getParam("imageRegion", ANARI_FLOAT32_BOX2, &region)
-      && (region.lower != float2(0.f) || region.upper != float2(1.f)))
+  getParam("imageRegion", ANARI_FLOAT32_BOX2, &region);
+  if (!(region.upper.x > region.lower.x && region.upper.y > region.lower.y))
   {
-    reportMessage(ANARI_SEVERITY_WARNING, "camera parameter 'imageRegion' is not supported");
+    reportMessage(ANARI_SEVERITY_WARNING,
+        "camera parameter 'imageRegion' (%g, %g)-(%g, %g) is empty, the whole image is used", region.lower.x,
+        region.lower.y, region.upper.x, region.upper.y);
+    region = box2(float2(0.f), float2(1.f));
   }
+  m_region_lower = region.lower;
+  m_region_upper = region.upper;
+}
+
+float2 Camera::regionSize() const
+{
+  return m_region_upper - m_region_lower;
+}
+
+float2 Camera::regionCenter() const
+{
+  return (m_region_lower + m_region_upper) * 0.5f;
 }
 
 void Camera::finalize()
@@ -75,17 +90,7 @@ void Camera::finalize()
       return;
   }
 
-  // the up vector must not be parallel to the direction
-  float3 up = m_up;
-  if (linalg::length(linalg::cross(m_direction, up)) < 1e-6f)
-  {
-    float3 unused;
-    makeBasis(m_direction, up, unused);
-  }
-
-  const float3 at = m_position + m_direction;
-  CHECK(rprCameraLookAt(
-      m_camera, m_position.x, m_position.y, m_position.z, at.x, at.y, at.z, up.x, up.y, up.z))
+  setTransform();
 
   if (m_near > 0.f)
   {
@@ -102,7 +107,28 @@ bool Camera::isValid() const
   return m_camera != nullptr;
 }
 
-void Camera::attachToScene(rpr_scene scene)
+void Camera::setTransform(const float2 &offset)
+{
+  if (!m_camera)
+    return;
+
+  // the up vector must not be parallel to the direction
+  float3 up = m_up;
+  if (linalg::length(linalg::cross(m_direction, up)) < 1e-6f)
+  {
+    float3 unused;
+    makeBasis(m_direction, up, unused);
+  }
+
+  // axes of the image plane
+  const float3 right    = linalg::normalize(linalg::cross(m_direction, up));
+  const float3 upward   = linalg::cross(right, m_direction);
+  const float3 position = m_position + right * offset.x + upward * offset.y;
+  const float3 at       = position + m_direction;
+  CHECK(rprCameraLookAt(m_camera, position.x, position.y, position.z, at.x, at.y, at.z, up.x, up.y, up.z))
+}
+
+void Camera::attachToScene(rpr_scene scene, const uint2 &)
 {
   CHECK(rprSceneSetCamera(scene, m_camera))
 }

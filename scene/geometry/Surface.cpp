@@ -56,8 +56,8 @@ box3 Surface::bounds() const
   return isValid() ? m_geometry->bounds() : emptyBox();
 }
 
-void Surface::attachToScene(
-    rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes, SceneItems &items)
+void Surface::attachToScene(rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes,
+    const RayVisibility &visibility, SceneItems &items)
 {
   if (!isValid() || !m_visible)
     return;
@@ -81,35 +81,52 @@ void Surface::attachToScene(
     perInstance |= context.buffer[slot] != nullptr;
   }
 
-  Material         *material = m_material && m_material->isValid() ? m_material.ptr : m_default_material.ptr;
-  rpr_material_node node     = nullptr;
+  Material            *material = m_material && m_material->isValid() ? m_material.ptr : m_default_material.ptr;
+  const MaterialGraph *graph    = nullptr;
   if (material && perInstance)
   {
     // The nodes refer to the buffers of this geometry, so they are not shared with other surfaces. They
     // are deleted together with the shapes of the scene.
     items.graphs.push_back(material->createMaterial(context));
-    node = items.graphs.back()->root;
+    graph = items.graphs.back().get();
   } else if (material)
   {
-    node = material->getMaterial(context);
+    graph = &material->getMaterial(context);
   }
+  const rpr_material_node node       = graph ? graph->root : nullptr;
+  const helium::TimeStamp materialID = graph ? graph->id : 0;
+
+  const rpr_shape base = m_geometry->getBaseShape();
+  // an instance is new or has another material than before, and the material reads primvars
+  bool primvarsNeeded = false;
 
   auto attachInstance = [&](const mat4 &instanceTransform, rpr_uint objectID) {
-    rpr_shape instance = nullptr;
-    CHECK(rprContextCreateInstance(state->context, m_geometry->getBaseShape(), &instance))
-    if (!instance)
-      return;
-    CHECK(rprShapeSetTransform(instance, false, &instanceTransform[0][0]))
-    if (perInstance)
+    SurfaceInstance entry;
+    const auto      pooled = items.pool.find(base);
+    if (pooled != items.pool.end())
     {
-      CHECK(rprShapeSetObjectID(instance, objectID))
-    }
-    if (node)
+      // an instance of the previous scene, it is attached to the scene already
+      entry = pooled->second;
+      items.pool.erase(pooled);
+    } else
     {
-      CHECK(rprShapeSetMaterial(instance, node))
+      entry.base = base;
+      CHECK(rprContextCreateInstance(state->context, base, &entry.instance))
+      if (!entry.instance)
+        return;
+      CHECK(rprSceneAttachShape(scene, entry.instance))
     }
-    CHECK(rprSceneAttachShape(scene, instance))
-    items.shapes.push_back(instance);
+    CHECK(rprShapeSetTransform(entry.instance, false, &instanceTransform[0][0]))
+    CHECK(rprShapeSetObjectID(entry.instance, perInstance ? objectID : 0))
+    CHECK(rprShapeSetMaterial(entry.instance, node))
+    primvarsNeeded |= entry.material != materialID && graph && graph->usesPrimvars;
+    entry.material = materialID;
+    if (!(entry.visibility == visibility))
+    {
+      setRayVisibility(state, entry.instance, visibility);
+      entry.visibility = visibility;
+    }
+    items.instances.push_back(entry);
   };
 
   if (m_geometry->isInstanced())
@@ -122,11 +139,13 @@ void Surface::attachToScene(
     attachInstance(transform, 0);
   }
 
-  // attach base invisible shape
-  if (items.base_shapes.insert(m_geometry->getBaseShape()).second)
+  // The base shape is invisible, but it has to be part of the scene. It stays attached if it was part of
+  // the previous scene.
+  if (items.base_shapes.insert(base).second && items.previous_base_shapes.count(base) == 0)
   {
-    CHECK(rprSceneAttachShape(scene, m_geometry->getBaseShape()))
+    CHECK(rprSceneAttachShape(scene, base))
   }
+  m_geometry->instancesAttached(items.build, primvarsNeeded);
 }
 
 } // namespace rpr

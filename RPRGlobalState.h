@@ -52,6 +52,10 @@ struct RPRGlobalState : public helium::BaseGlobalDeviceState
   // so they are leaked from then on.
   bool contextFailed{false};
 
+  // the node definitions and the attribute names of MaterialX documents were given to the context
+  // (see MaterialXMaterial.cpp)
+  bool materialXInitialized{false};
+
   // The RPR context is not thread safe: every RPR call is done while this mutex is locked. RPR objects are
   // only created and modified when the commit buffer is flushed or a frame is rendered.
   std::recursive_mutex rprMutex;

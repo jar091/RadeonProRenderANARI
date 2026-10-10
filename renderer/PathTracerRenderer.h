@@ -25,8 +25,10 @@ struct PathTracerRenderer : public Renderer
   void attachToContext() const override;
 
  private:
-  int   m_max_ray_depth{8};
-  float m_radiance_clamp{0.f};
+  // values of the context parameters of RPR
+  int   m_max_recursion{8};
+  int   m_max_depth_diffuse{8};
+  float m_radiance_clamp{0.f}; // 0: no clamp
 };
 
 } // namespace anari::rpr

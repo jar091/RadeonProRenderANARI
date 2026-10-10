@@ -192,7 +192,7 @@ void Frame::render()
   rpr_scene scene = m_world->update(*m_renderer);
   if (!scene)
     return;
-  m_camera->attachToScene(scene);
+  m_camera->attachToScene(scene, m_size);
   m_renderer->attachToContext();
 
   const bool visibleEnvironment = m_world->hasVisibleEnvironment();

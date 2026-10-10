@@ -31,12 +31,21 @@ struct Camera : public Object
   void finalize() override;
   bool isValid() const override;
 
-  void attachToScene(rpr_scene scene);
+  // makes the camera the one of the scene for a frame of the given size
+  virtual void attachToScene(rpr_scene scene, const uint2 &frameSize);
 
   // value of the depth channel of a frame for a point of the scene
   virtual float depth(const float3 &point) const = 0;
 
  protected:
+  // Sets position and orientation of the RPR camera. 'offset' moves the camera in its image plane (x to
+  // the right, y upwards) without changing its direction.
+  void setTransform(const float2 &offset = float2(0.f));
+
+  // size and center of the image region
+  float2 regionSize() const;
+  float2 regionCenter() const;
+
   rpr_camera m_camera{};
 
   float3 m_position{0.f};
@@ -45,6 +54,11 @@ struct Camera : public Object
   float  m_aspect{1.f};
   float  m_near{0.f};
   float  m_far{0.f};
+  // 'imageRegion': the part of the image plane which a frame shows, in normalized coordinates of the
+  // plane which is defined by the field of view (or the height) and 'aspect'. The origin is the lower
+  // left corner.
+  float2 m_region_lower{0.f};
+  float2 m_region_upper{1.f};
 };
 
 } // namespace rpr

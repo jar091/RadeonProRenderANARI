@@ -39,9 +39,18 @@ void Perspective::finalize()
 
   CHECK(rprCameraSetMode(m_camera, RPR_CAMERA_MODE_PERSPECTIVE))
 
-  // sensor size and focal length are in millimeters
-  const float sensorWidth = m_sensor_height * m_aspect;
-  CHECK(rprCameraSetSensorSize(m_camera, sensorWidth, m_sensor_height))
+  // Sensor size and focal length are in millimeters. A frame shows the whole sensor, whatever its size
+  // in pixels is: at the distance 1 it is 'sensor width / focal length' wide and 'sensor height / focal
+  // length' high. The field of view and the aspect ratio define the sensor of the whole image plane.
+  // The image region is a part of it with the same focal length: a smaller sensor, moved by the lens
+  // shift. The lens shift of RPR is the offset of the center in units of the sensor size (measured).
+  // The focal length does not depend on the region, so the depth of field does not either.
+  const float2 regionSize   = this->regionSize();
+  const float2 regionCenter = this->regionCenter();
+  CHECK(rprCameraSetSensorSize(
+      m_camera, m_sensor_height * m_aspect * regionSize.x, m_sensor_height * regionSize.y))
+  CHECK(rprCameraSetLensShift(
+      m_camera, (regionCenter.x - 0.5f) / regionSize.x, (regionCenter.y - 0.5f) / regionSize.y))
 
   const float focalLength = m_sensor_height / (2.f * std::tan(m_fovy * 0.5f));
   CHECK(rprCameraSetFocalLength(m_camera, focalLength))

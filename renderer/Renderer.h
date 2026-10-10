@@ -32,6 +32,9 @@ struct Renderer : public Object
 
   // radiance of the ambient light
   float3 ambientRadiance() const;
+  // time of the last change of the ambient light: the environment of a world has to be updated then,
+  // but not when other parameters of the renderer change
+  helium::TimeStamp ambientChanged() const;
   // background at a position of the image, (0, 0) is the lower left corner
   float4 background(float u, float v) const;
   bool   hasBackgroundImage() const;
@@ -43,6 +46,7 @@ struct Renderer : public Object
   helium::ChangeObserverPtr<Array2D> m_background_image;
   float                              m_ambient_radiance{0.f};
   float3                             m_ambient_color{1.f};
+  helium::TimeStamp                  m_ambient_changed{0};
   int                                m_pixel_samples{1};
 };
 

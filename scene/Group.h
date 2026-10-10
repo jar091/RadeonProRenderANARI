@@ -14,6 +14,7 @@ limitations under the License.
 #pragma once
 
 #include "../rpr_common.h"
+#include "RayVisibility.h"
 #include "SceneObject.h"
 #include "geometry/Surface.h"
 
@@ -39,8 +40,10 @@ struct GroupContent
 
   box3 bounds() const;
 
+  // 'visibility' is applied to the surfaces. Lights and volumes are not affected by it.
   void attachToScene(rpr_scene scene, const mat4 &transform, const UniformAttributeSet &instanceAttributes,
-      SceneItems &items, std::vector<EnvironmentLightInstance> &environmentLights) const;
+      const RayVisibility &visibility, SceneItems &items,
+      std::vector<EnvironmentLightInstance> &environmentLights) const;
 
  private:
   Object                                 *m_owner{};
