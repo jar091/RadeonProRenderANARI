@@ -11,7 +11,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(CMAKE_INSTALL_RPATH "$ORIGIN")
+if (APPLE)
+    # dyld does not know $ORIGIN: the RPR libraries are found next to the device.
+    set(CMAKE_INSTALL_RPATH "@loader_path")
+else ()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
+endif ()
 
 ## Establish project
 

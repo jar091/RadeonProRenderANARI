@@ -452,6 +452,31 @@ void RPRDevice::initDevice()
         RPR_CONTEXT_GPU14_NAME, RPR_CONTEXT_GPU15_NAME};
     rprContextGetInfo(state.context, gpuNames[std::clamp(m_gpu_index, 0, 15)], sizeof(name), name, nullptr);
     state.computeDeviceName = name;
+#if defined(__linux__)
+    // Northstar creates its context without a GPU when it has no precompiled kernels for the GPU (the
+    // CUDA kernels of RadeonProRender SDK 3.1.7 are built for sm_75 to sm_90, so there are none for
+    // Blackwell): the GPU has no name then and every frame is black. Fall back to the CPU, as for a
+    // context which could not be created.
+    if (name[0] == 0 && !(flags & (RPR_CREATION_FLAGS_ENABLE_CPU | RPR_CREATION_FLAGS_ENABLE_OPENCL)))
+    {
+      reportMessage(ANARI_SEVERITY_WARNING,
+          "the RadeonProRender context has no GPU (no precompiled kernels for this GPU?), falling back "
+          "to CPU rendering");
+      state.deleteObject(state.matsys, "rprObjectDelete(matsys)");
+      state.matsys           = nullptr;
+      rpr_context gpuContext = state.context;
+      state.context          = nullptr;
+      state.deleteObject(gpuContext, "rprObjectDelete(context)");
+      flags = RPR_CREATION_FLAGS_ENABLE_CPU;
+      createContext(flags, kernelsPath, cachePath);
+      if (!state.context)
+      {
+        reportMessage(ANARI_SEVERITY_FATAL_ERROR, "failed to create RadeonProRender context");
+        return;
+      }
+      state.usesGPU = false;
+    }
+#endif
   }
   if (flags & RPR_CREATION_FLAGS_ENABLE_CPU)
   {
